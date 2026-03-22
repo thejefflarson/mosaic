@@ -55,6 +55,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         appMenuItem.submenu = appMenu
         appMenu.addItem(withTitle: "Quit Mosaic", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
 
+        // File menu
+        let fileMenuItem = NSMenuItem(title: "File", action: nil, keyEquivalent: "")
+        mainMenu.addItem(fileMenuItem)
+        let fileMenu = NSMenu(title: "File")
+        fileMenuItem.submenu = fileMenu
+        fileMenu.addItem(withTitle: "New Terminal", action: #selector(CanvasViewController.spawnTerminalAtCenter), keyEquivalent: "t")
+        fileMenu.addItem(withTitle: "Save Workspace", action: #selector(CanvasViewController.saveWorkspace), keyEquivalent: "s")
+
         // Edit menu — standard actions travel the responder chain automatically
         let editMenuItem = NSMenuItem(title: "Edit", action: nil, keyEquivalent: "")
         mainMenu.addItem(editMenuItem)
@@ -69,14 +77,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         editMenu.addItem(withTitle: "Copy",  action: #selector(NSText.copy(_:)),  keyEquivalent: "c")
         editMenu.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
         editMenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
-
-        // File menu
-        let fileMenuItem = NSMenuItem(title: "File", action: nil, keyEquivalent: "")
-        mainMenu.addItem(fileMenuItem)
-        let fileMenu = NSMenu(title: "File")
-        fileMenuItem.submenu = fileMenu
-        fileMenu.addItem(withTitle: "New Terminal", action: #selector(CanvasViewController.spawnTerminalAtCenter), keyEquivalent: "t")
-        fileMenu.addItem(withTitle: "Save Workspace", action: #selector(CanvasViewController.saveWorkspace), keyEquivalent: "s")
 
         // View menu
         let viewMenuItem = NSMenuItem(title: "View", action: nil, keyEquivalent: "")
