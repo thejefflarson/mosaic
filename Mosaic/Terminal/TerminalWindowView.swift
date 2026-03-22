@@ -49,7 +49,10 @@ final class TerminalWindowView: NSView {
     // MARK: - Subviews
 
     private let titleBar = TitleBarView()
-    private var termView: InterceptingTerminalView!
+    // nonisolated(unsafe): startProcess is dispatched to a background queue to keep
+    // forkpty() off the main thread. SwiftTerm dispatches all post-fork UI callbacks
+    // back to the main thread internally.
+    private nonisolated(unsafe) var termView: InterceptingTerminalView!
     private var frameBeforeDrag: CGRect = .zero
 
     // MARK: - Canvas reference (for zoom-corrected drag)
@@ -203,15 +206,26 @@ final class TerminalWindowView: NSView {
         let cwd = cwdExists ? currentCwd : FileManager.default.homeDirectoryForCurrentUser.path
 
         let execName = "-" + (shell as NSString).lastPathComponent
-        termView.startProcess(
-            executable: shell,
-            args: [],
-            environment: env.map { "\($0.key)=\($0.value)" },
-            execName: execName,
-            currentDirectory: cwd
-        )
-        termView.changeScrollback(settings.scrollbackLines)
-        termView.getTerminal().setCursorStyle(settings.swiftTermCursorStyle)
+        let envList  = env.map { "\($0.key)=\($0.value)" }
+        let shellPath = shell
+        let scrollbackLines = settings.scrollbackLines
+        let cursorStyle = settings.swiftTermCursorStyle
+
+        // Run forkpty on a background thread so the ~2 s atfork-handler cost
+        // (libBacktraceRecording) doesn't block the main thread and cause a beachball.
+        DispatchQueue.global(qos: .userInitiated).async { [termView] in
+            termView!.startProcess(
+                executable: shellPath,
+                args: [],
+                environment: envList,
+                execName: execName,
+                currentDirectory: cwd
+            )
+            DispatchQueue.main.async {
+                termView!.changeScrollback(scrollbackLines)
+                termView!.getTerminal().setCursorStyle(cursorStyle)
+            }
+        }
 
         // Apply theme and optionally restore scrollback after shell init sequences have run.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in

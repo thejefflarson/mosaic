@@ -21,6 +21,7 @@ final class MinimapView: NSView {
     private var terminalWindows: [TerminalWindowView] = []
     private var annotationViews: [AnnotationView] = []
     private var currentViewport = Viewport()
+    private var focusedWindowID: UUID?
 
     // Computed during render; used for click-to-pan
     private var worldExtent = CGRect(x: -200, y: -200, width: 2000, height: 1600)
@@ -87,10 +88,12 @@ final class MinimapView: NSView {
 
     // MARK: - Update
 
-    func update(viewport: Viewport, windows: [TerminalWindowView], annotations: [AnnotationView] = []) {
+    func update(viewport: Viewport, windows: [TerminalWindowView], annotations: [AnnotationView] = [],
+                focusedWindow: TerminalWindowView? = nil) {
         currentViewport = viewport
         terminalWindows = windows
         annotationViews = annotations
+        focusedWindowID = focusedWindow?.id
         renderFlags.withLock { $0.isDirty = true }
     }
 
@@ -130,7 +133,8 @@ final class MinimapView: NSView {
             img.unlockFocus()
             annotImages.append((av.frame, img))
         }
-        let windowFrames = windows.map { (frame: $0.frame, title: $0.currentTitle) }
+        let focusedID = focusedWindowID
+        let windowFrames = windows.map { (frame: $0.frame, title: $0.currentTitle, isActive: $0.id == focusedID) }
 
         // Compose the minimap image using simple shapes — no layer.render() calls
         // so we don't interfere with SwiftTerm's Metal rendering pipeline.
@@ -171,9 +175,14 @@ final class MinimapView: NSView {
                 let bar = NSRect(x: dest.minX, y: dest.minY, width: dest.width, height: barH)
                 NSColor(white: 0.25, alpha: 1).setFill()
                 bar.fill()
-                // Border
-                NSColor(white: 0.35, alpha: 1).setStroke()
-                bodyPath.lineWidth = 0.5
+                // Border — bright blue for the focused terminal, subtle otherwise
+                if wf.isActive {
+                    NSColor.systemBlue.setStroke()
+                    bodyPath.lineWidth = 1.5
+                } else {
+                    NSColor(white: 0.35, alpha: 1).setStroke()
+                    bodyPath.lineWidth = 0.5
+                }
                 bodyPath.stroke()
             }
 

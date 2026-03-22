@@ -72,6 +72,8 @@ final class CanvasViewController: NSViewController {
     // MARK: - State
 
     private var broadcastMode = false
+    private var focusFollowsCenter = false
+    private var focusFollowsCenterTimer: Timer?
     private var saveDebounceTimer: Timer?
     private var workspaceRestored = false
     private var currentTheme: Theme = {
@@ -141,12 +143,13 @@ final class CanvasViewController: NSViewController {
             self?.spawnTerminal(at: worldPt)
         }
 
-        canvasView.onViewportChanged = { [weak self] vp in
+        canvasView.onViewportChanged = { [weak self] _ in
             guard let self else { return }
-            minimapView.update(viewport: vp, windows: terminalManager.windows, annotations: annotations)
+            updateMinimap()
             updateZoomLabel()
             scheduleSave()
             pendingViewportUpdate = true
+            if focusFollowsCenter { scheduleFocusFollowsCenter() }
         }
     }
 
@@ -164,6 +167,10 @@ final class CanvasViewController: NSViewController {
 
         toolPalette.onSnappingToggled = { [weak self] enabled in
             self?.snappingEnabled = enabled
+        }
+
+        toolPalette.onFocusFollowsCenterToggled = { [weak self] enabled in
+            self?.focusFollowsCenter = enabled
         }
 
         canvasView.onToolBegan = { [weak self] tool, worldPt in
@@ -299,9 +306,7 @@ final class CanvasViewController: NSViewController {
         }
 
         tw.onMoved = { [weak self] in
-            self?.minimapView.update(viewport: self?.canvasView.viewport ?? Viewport(),
-                                     windows: self?.terminalManager.windows ?? [],
-                                     annotations: self?.annotations ?? [])
+            self?.updateMinimap()
             self?.scheduleSave()
         }
 
@@ -332,7 +337,7 @@ final class CanvasViewController: NSViewController {
             vc.removeTerminal(tw)
         }
 
-        minimapView.update(viewport: canvasView.viewport, windows: terminalManager.windows, annotations: annotations)
+        updateMinimap()
         scheduleSave()
     }
 
@@ -344,10 +349,12 @@ final class CanvasViewController: NSViewController {
         undoManager?.registerUndo(withTarget: self) { @MainActor vc in
             vc.spawnTerminalWithFrame(savedFrame, shell: savedShell, cwd: savedCwd)
         }
+        // Nil out onClose before kill: terminate() sends EOF which causes the shell to
+        // exit, firing processTerminated -> onClose -> removeTerminal a second time,
+        // which would register a duplicate undo entry and produce two terminals on undo.
+        tw.onClose = nil
         terminalManager.kill(tw)
-        minimapView.update(viewport: canvasView.viewport,
-                           windows: terminalManager.windows,
-                           annotations: annotations)
+        updateMinimap()
         scheduleSave()
     }
 
@@ -359,9 +366,7 @@ final class CanvasViewController: NSViewController {
             vc.moveTerminal(tw, to: oldFrame)
         }
         tw.frame = newFrame
-        minimapView.update(viewport: canvasView.viewport,
-                           windows: terminalManager.windows,
-                           annotations: annotations)
+        updateMinimap()
         scheduleSave()
     }
 
@@ -417,10 +422,10 @@ final class CanvasViewController: NSViewController {
             canvasView.setSelectionRect(selectionRect(from: start, to: worldPt))
         case .arrow:
             (activeAnnotation as? ArrowAnnotationView)?.updateEnd(worldPt)
-            minimapView.update(viewport: canvasView.viewport, windows: terminalManager.windows, annotations: annotations)
+            updateMinimap()
         case .pen:
             (activeAnnotation as? FreehandAnnotationView)?.addWorldPoint(worldPt)
-            minimapView.update(viewport: canvasView.viewport, windows: terminalManager.windows, annotations: annotations)
+            updateMinimap()
         default: break
         }
     }
@@ -463,9 +468,7 @@ final class CanvasViewController: NSViewController {
             self?.removeAnnotation(av)
         }
         av.onChanged = { [weak self] in
-            self?.minimapView.update(viewport: self?.canvasView.viewport ?? Viewport(),
-                                     windows: self?.terminalManager.windows ?? [],
-                                     annotations: self?.annotations ?? [])
+            self?.updateMinimap()
             self?.scheduleSave()
         }
         av.onDragEnded = { [weak self, weak av] fromFrame, _ in
@@ -492,7 +495,7 @@ final class CanvasViewController: NSViewController {
         undoManager?.endUndoGrouping()
         annotations.append(av)
         canvasView.addAnnotation(av)
-        minimapView.update(viewport: canvasView.viewport, windows: terminalManager.windows, annotations: annotations)
+        updateMinimap()
     }
 
     func removeAnnotation(_ av: AnnotationView) {
@@ -506,7 +509,7 @@ final class CanvasViewController: NSViewController {
         undoManager?.endUndoGrouping()
         annotations.removeAll { $0 === av }
         canvasView.removeAnnotation(av)
-        minimapView.update(viewport: canvasView.viewport, windows: terminalManager.windows, annotations: annotations)
+        updateMinimap()
         scheduleSave()
     }
 
@@ -520,7 +523,7 @@ final class CanvasViewController: NSViewController {
         }
         undoManager?.endUndoGrouping()
         av.frame = newFrame
-        minimapView.update(viewport: canvasView.viewport, windows: terminalManager.windows, annotations: annotations)
+        updateMinimap()
         scheduleSave()
     }
 
@@ -651,7 +654,7 @@ final class CanvasViewController: NSViewController {
                 break
             }
         }
-        minimapView.update(viewport: canvasView.viewport, windows: terminalManager.windows, annotations: annotations)
+        updateMinimap()
     }
 
     @objc func openThemeEditor() {
@@ -836,6 +839,32 @@ final class CanvasViewController: NSViewController {
             av.frame = frame
             addAnnotation(av)
         }
+    }
+
+    private func updateMinimap() {
+        minimapView.update(viewport: canvasView.viewport, windows: terminalManager.windows,
+                           annotations: annotations, focusedWindow: canvasView.activeTerminal)
+    }
+
+    private func scheduleFocusFollowsCenter() {
+        focusFollowsCenterTimer?.invalidate()
+        focusFollowsCenterTimer = Timer.scheduledTimer(withTimeInterval: 0.15, repeats: false) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.updateFocusFollowsCenter() }
+        }
+    }
+
+    private func updateFocusFollowsCenter() {
+        guard focusFollowsCenter else { return }
+        let screenCenter = CGPoint(x: canvasView.bounds.midX, y: canvasView.bounds.midY)
+        let worldCenter = canvasView.viewport.screenToWorld(screenCenter)
+        guard let closest = terminalManager.windows.min(by: {
+            let da = hypot($0.frame.midX - worldCenter.x, $0.frame.midY - worldCenter.y)
+            let db = hypot($1.frame.midX - worldCenter.x, $1.frame.midY - worldCenter.y)
+            return da < db
+        }) else { return }
+        guard closest !== canvasView.activeTerminal else { return }
+        canvasView.activateTerminal(closest)
+        closest.focusTerminal()
     }
 
     private func scheduleSave() {
