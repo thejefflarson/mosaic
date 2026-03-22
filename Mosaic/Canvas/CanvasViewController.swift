@@ -308,8 +308,8 @@ final class CanvasViewController: NSViewController {
         tw.onMoveEnded = { [weak self, weak tw] fromFrame, toFrame in
             guard let self, let tw else { return }
             undoManager?.setActionName("Move Terminal")
-            undoManager?.registerUndo(withTarget: self) { vc in
-                MainActor.assumeIsolated { vc.moveTerminal(tw, to: fromFrame) }
+            undoManager?.registerUndo(withTarget: self) { @MainActor vc in
+                vc.moveTerminal(tw, to: fromFrame)
             }
         }
         tw.snapFrame = { [weak self, weak tw] proposed in
@@ -327,11 +327,9 @@ final class CanvasViewController: NSViewController {
         tw.focusTerminal()
 
         undoManager?.setActionName("New Terminal")
-        undoManager?.registerUndo(withTarget: self) { [weak tw] vc in
-            MainActor.assumeIsolated {
-                guard let tw else { return }
-                vc.removeTerminal(tw)
-            }
+        undoManager?.registerUndo(withTarget: self) { @MainActor [weak tw] vc in
+            guard let tw else { return }
+            vc.removeTerminal(tw)
         }
 
         minimapView.update(viewport: canvasView.viewport, windows: terminalManager.windows, annotations: annotations)
@@ -343,8 +341,8 @@ final class CanvasViewController: NSViewController {
         let savedShell = tw.shell
         let savedCwd   = tw.currentCwd
         undoManager?.setActionName("Close Terminal")
-        undoManager?.registerUndo(withTarget: self) { vc in
-            MainActor.assumeIsolated { vc.spawnTerminalWithFrame(savedFrame, shell: savedShell, cwd: savedCwd) }
+        undoManager?.registerUndo(withTarget: self) { @MainActor vc in
+            vc.spawnTerminalWithFrame(savedFrame, shell: savedShell, cwd: savedCwd)
         }
         terminalManager.kill(tw)
         minimapView.update(viewport: canvasView.viewport,
@@ -356,11 +354,9 @@ final class CanvasViewController: NSViewController {
     private func moveTerminal(_ tw: TerminalWindowView, to newFrame: CGRect) {
         let oldFrame = tw.frame
         undoManager?.setActionName("Move Terminal")
-        undoManager?.registerUndo(withTarget: self) { [weak tw] vc in
-            MainActor.assumeIsolated {
-                guard let tw else { return }
-                vc.moveTerminal(tw, to: oldFrame)
-            }
+        undoManager?.registerUndo(withTarget: self) { @MainActor [weak tw] vc in
+            guard let tw else { return }
+            vc.moveTerminal(tw, to: oldFrame)
         }
         tw.frame = newFrame
         minimapView.update(viewport: canvasView.viewport,
@@ -476,11 +472,9 @@ final class CanvasViewController: NSViewController {
             guard let self, let av else { return }
             undoManager?.beginUndoGrouping()
             undoManager?.setActionName("Move")
-            undoManager?.registerUndo(withTarget: self) { [weak av] vc in
-                MainActor.assumeIsolated {
-                    guard let av else { return }
-                    vc.moveAnnotation(av, to: fromFrame)
-                }
+            undoManager?.registerUndo(withTarget: self) { @MainActor [weak av] vc in
+                guard let av else { return }
+                vc.moveAnnotation(av, to: fromFrame)
             }
             undoManager?.endUndoGrouping()
         }
@@ -491,11 +485,9 @@ final class CanvasViewController: NSViewController {
         av.clearSnapGuides = { [weak self] in self?.snapOverlay.guides = [] }
         undoManager?.beginUndoGrouping()
         undoManager?.setActionName("Add Annotation")
-        undoManager?.registerUndo(withTarget: self) { [weak av] vc in
-            MainActor.assumeIsolated {
-                guard let av else { return }
-                vc.removeAnnotation(av)
-            }
+        undoManager?.registerUndo(withTarget: self) { @MainActor [weak av] vc in
+            guard let av else { return }
+            vc.removeAnnotation(av)
         }
         undoManager?.endUndoGrouping()
         annotations.append(av)
@@ -508,8 +500,8 @@ final class CanvasViewController: NSViewController {
         undoManager?.setActionName("Delete Annotation")
         // Strong capture: av is removed from the view hierarchy below, so nothing
         // else retains it. The undo manager must hold it alive until undo is cleared.
-        undoManager?.registerUndo(withTarget: self) { vc in
-            MainActor.assumeIsolated { vc.addAnnotation(av) }
+        undoManager?.registerUndo(withTarget: self) { @MainActor vc in
+            vc.addAnnotation(av)
         }
         undoManager?.endUndoGrouping()
         annotations.removeAll { $0 === av }
@@ -522,11 +514,9 @@ final class CanvasViewController: NSViewController {
         let oldFrame = av.frame
         undoManager?.beginUndoGrouping()
         undoManager?.setActionName("Move")
-        undoManager?.registerUndo(withTarget: self) { [weak av] vc in
-            MainActor.assumeIsolated {
-                guard let av else { return }
-                vc.moveAnnotation(av, to: oldFrame)
-            }
+        undoManager?.registerUndo(withTarget: self) { @MainActor [weak av] vc in
+            guard let av else { return }
+            vc.moveAnnotation(av, to: oldFrame)
         }
         undoManager?.endUndoGrouping()
         av.frame = newFrame
@@ -841,7 +831,6 @@ final class CanvasViewController: NSViewController {
 
         case .image:
             guard let path = s.imagePath,
-                  path.hasPrefix(WorkspaceStore.shared.imagesDirectory.path + "/"),
                   let image = NSImage(contentsOfFile: path) else { return }
             let av = ImageAnnotationView(at: frame.origin, image: image)
             av.frame = frame
