@@ -903,10 +903,25 @@ final class CanvasViewController: NSViewController {
     }
 }
 
+// MARK: - Undo / Redo
+
+extension CanvasViewController {
+    // Explicit overrides ensure the canvas undo manager is a guaranteed stop in the
+    // responder chain — without these, Cmd+Z can get lost if a terminal is focused.
+    override func undo(_ sender: Any?) { undoManager?.undo() }
+    override func redo(_ sender: Any?) { undoManager?.redo() }
+}
+
 // MARK: - Menu validation
 
 extension CanvasViewController: NSMenuItemValidation {
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == #selector(undo(_:)) {
+            return undoManager?.canUndo ?? false
+        }
+        if menuItem.action == #selector(redo(_:)) {
+            return undoManager?.canRedo ?? false
+        }
         if menuItem.action == #selector(selectTheme(_:)) {
             let themes = Theme.allThemes
             guard menuItem.tag < themes.count else { return true }
