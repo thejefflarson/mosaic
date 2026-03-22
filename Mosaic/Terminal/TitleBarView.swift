@@ -143,7 +143,7 @@ final class TitleBarView: NSView {
     }
 
     override func mouseUp(with event: NSEvent) {
-        CanvasCursorManager.endDrag(in: window)
+        if lastDragLocation != nil { CanvasCursorManager.endDrag(in: window) }
         lastDragLocation = nil
         if wasDragging { onDragEnded?() }
         wasDragging = false
