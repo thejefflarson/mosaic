@@ -146,6 +146,14 @@ final class CanvasView: NSView {
     private var lastDragPoint: CGPoint?
 
     override func mouseDown(with event: NSEvent) {
+        // With fullSizeContentView + transparent title bar, the canvas covers the title bar
+        // area. If the click is above contentLayoutRect, route to window dragging rather
+        // than starting a canvas pan.
+        if let win = window, event.locationInWindow.y > win.contentLayoutRect.maxY {
+            win.performDrag(with: event)
+            return
+        }
+
         let loc = convert(event.locationInWindow, from: nil)
         let worldPt = convert(loc, to: worldView)
 
@@ -247,7 +255,7 @@ final class CanvasView: NSView {
 
     // MARK: - Active terminal
 
-    private weak var activeTerminal: TerminalWindowView?
+    private(set) weak var activeTerminal: TerminalWindowView?
 
     private func activate(_ tw: TerminalWindowView) {
         guard tw !== activeTerminal else { return }

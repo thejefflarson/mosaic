@@ -34,8 +34,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
         window.contentViewController = vc
-        window.center()
-        window.isRestorable = false
+        window.isRestorable = true
+        // center() only on first launch; setFrameAutosaveName restores saved position otherwise
+        if !window.setFrameAutosaveName("MainWindow") {
+            window.center()
+        }
         window.makeKeyAndOrderFront(nil)
 
         let wc = NSWindowController(window: window)
@@ -48,69 +51,148 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let mainMenu = NSMenu()
         NSApp.mainMenu = mainMenu
 
-        // App menu
+        // ── App menu ──────────────────────────────────────────────────────────
         let appMenuItem = NSMenuItem()
         mainMenu.addItem(appMenuItem)
         let appMenu = NSMenu()
         appMenuItem.submenu = appMenu
-        appMenu.addItem(withTitle: "Quit Mosaic", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        appMenu.addItem(withTitle: "About Mosaic",
+                        action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)),
+                        keyEquivalent: "")
+        appMenu.addItem(NSMenuItem.separator())
+        appMenu.addItem(withTitle: "Terminal Settings…",
+                        action: #selector(CanvasViewController.openTerminalSettings),
+                        keyEquivalent: ",")
+        appMenu.addItem(NSMenuItem.separator())
+        let servicesItem = NSMenuItem(title: "Services", action: nil, keyEquivalent: "")
+        let servicesMenu = NSMenu(title: "Services")
+        servicesItem.submenu = servicesMenu
+        NSApp.servicesMenu = servicesMenu
+        appMenu.addItem(servicesItem)
+        appMenu.addItem(NSMenuItem.separator())
+        appMenu.addItem(withTitle: "Hide Mosaic",
+                        action: #selector(NSApplication.hide(_:)),
+                        keyEquivalent: "h")
+        let hideOthersItem = NSMenuItem(title: "Hide Others",
+                                        action: #selector(NSApplication.hideOtherApplications(_:)),
+                                        keyEquivalent: "h")
+        hideOthersItem.keyEquivalentModifierMask = [.command, .option]
+        appMenu.addItem(hideOthersItem)
+        appMenu.addItem(withTitle: "Show All",
+                        action: #selector(NSApplication.unhideAllApplications(_:)),
+                        keyEquivalent: "")
+        appMenu.addItem(NSMenuItem.separator())
+        appMenu.addItem(withTitle: "Quit Mosaic",
+                        action: #selector(NSApplication.terminate(_:)),
+                        keyEquivalent: "q")
 
-        // File menu
+        // ── File menu ─────────────────────────────────────────────────────────
         let fileMenuItem = NSMenuItem(title: "File", action: nil, keyEquivalent: "")
         mainMenu.addItem(fileMenuItem)
         let fileMenu = NSMenu(title: "File")
         fileMenuItem.submenu = fileMenu
-        fileMenu.addItem(withTitle: "New Terminal", action: #selector(CanvasViewController.spawnTerminalAtCenter), keyEquivalent: "t")
-        fileMenu.addItem(withTitle: "Save Workspace", action: #selector(CanvasViewController.saveWorkspace), keyEquivalent: "s")
+        fileMenu.addItem(withTitle: "New Terminal",
+                         action: #selector(CanvasViewController.spawnTerminalAtCenter),
+                         keyEquivalent: "t")
+        fileMenu.addItem(withTitle: "Save Workspace",
+                         action: #selector(CanvasViewController.saveWorkspace),
+                         keyEquivalent: "s")
 
-        // Edit menu — standard actions travel the responder chain automatically
+        // ── Edit menu — standard actions travel the responder chain automatically
         let editMenuItem = NSMenuItem(title: "Edit", action: nil, keyEquivalent: "")
         mainMenu.addItem(editMenuItem)
         let editMenu = NSMenu(title: "Edit")
         editMenuItem.submenu = editMenu
-        editMenu.addItem(withTitle: "Undo", action: #selector(UndoManager.undo), keyEquivalent: "z")
-        let redoItem = NSMenuItem(title: "Redo", action: #selector(UndoManager.redo), keyEquivalent: "z")
+        editMenu.addItem(withTitle: "Undo", action: #selector(CanvasViewController.undo(_:)), keyEquivalent: "z")
+        let redoItem = NSMenuItem(title: "Redo", action: #selector(CanvasViewController.redo(_:)), keyEquivalent: "z")
         redoItem.keyEquivalentModifierMask = [.command, .shift]
         editMenu.addItem(redoItem)
         editMenu.addItem(NSMenuItem.separator())
-        editMenu.addItem(withTitle: "Cut",   action: #selector(NSText.cut(_:)),   keyEquivalent: "x")
-        editMenu.addItem(withTitle: "Copy",  action: #selector(NSText.copy(_:)),  keyEquivalent: "c")
-        editMenu.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        editMenu.addItem(withTitle: "Cut",        action: #selector(NSText.cut(_:)),       keyEquivalent: "x")
+        editMenu.addItem(withTitle: "Copy",       action: #selector(NSText.copy(_:)),      keyEquivalent: "c")
+        editMenu.addItem(withTitle: "Paste",      action: #selector(NSText.paste(_:)),     keyEquivalent: "v")
         editMenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
 
-        // View menu
+        // ── View menu ─────────────────────────────────────────────────────────
         let viewMenuItem = NSMenuItem(title: "View", action: nil, keyEquivalent: "")
         mainMenu.addItem(viewMenuItem)
         let viewMenu = NSMenu(title: "View")
         viewMenuItem.submenu = viewMenu
-        viewMenu.addItem(withTitle: "Reset Zoom", action: #selector(CanvasViewController.resetZoom), keyEquivalent: "0")
-        viewMenu.addItem(withTitle: "Fit All Windows", action: #selector(CanvasViewController.fitAll), keyEquivalent: "f")
+        viewMenu.addItem(withTitle: "Reset Zoom",
+                         action: #selector(CanvasViewController.resetZoom),
+                         keyEquivalent: "0")
+        // "Fit All Windows" intentionally has no shortcut — Cmd+F is reserved for Find
+        viewMenu.addItem(withTitle: "Fit All Windows",
+                         action: #selector(CanvasViewController.fitAll),
+                         keyEquivalent: "")
         viewMenu.addItem(NSMenuItem.separator())
-        viewMenu.addItem(withTitle: "Snap to Alignment", action: #selector(CanvasViewController.toggleSnapping), keyEquivalent: "")
-        let broadcastItem = NSMenuItem(title: "Broadcast Mode", action: #selector(CanvasViewController.toggleBroadcast), keyEquivalent: "b")
+        viewMenu.addItem(withTitle: "Snap to Alignment",
+                         action: #selector(CanvasViewController.toggleSnapping),
+                         keyEquivalent: "")
+        let broadcastItem = NSMenuItem(title: "Broadcast Mode",
+                                       action: #selector(CanvasViewController.toggleBroadcast),
+                                       keyEquivalent: "b")
         broadcastItem.keyEquivalentModifierMask = [.command, .shift]
         viewMenu.addItem(broadcastItem)
-        viewMenu.addItem(withTitle: "Show FPS", action: #selector(CanvasViewController.toggleFPSOverlay), keyEquivalent: "")
-
+        viewMenu.addItem(withTitle: "Show FPS",
+                         action: #selector(CanvasViewController.toggleFPSOverlay),
+                         keyEquivalent: "")
         viewMenu.addItem(NSMenuItem.separator())
-
-        viewMenu.addItem(withTitle: "Terminal Settings…",
-                         action: #selector(CanvasViewController.openTerminalSettings),
-                         keyEquivalent: ",")
-
-        let editThemeItem = NSMenuItem(title: "Edit Theme…",
-                                       action: #selector(CanvasViewController.openThemeEditor),
-                                       keyEquivalent: "")
-        viewMenu.addItem(editThemeItem)
-
+        viewMenu.addItem(withTitle: "Edit Theme…",
+                         action: #selector(CanvasViewController.openThemeEditor),
+                         keyEquivalent: "")
         viewMenu.addItem(NSMenuItem.separator())
         let themeMenuItem = NSMenuItem(title: "Theme", action: nil, keyEquivalent: "")
-        let menu = NSMenu(title: "Theme")
-        menu.delegate = self
-        themeMenuItem.submenu = menu
+        let themeSubmenu = NSMenu(title: "Theme")
+        themeSubmenu.delegate = self
+        themeMenuItem.submenu = themeSubmenu
         viewMenu.addItem(themeMenuItem)
-        themeMenu = menu
+        themeMenu = themeSubmenu
         rebuildThemeMenuItems()
+
+        // ── Window menu ───────────────────────────────────────────────────────
+        let windowMenuItem = NSMenuItem(title: "Window", action: nil, keyEquivalent: "")
+        mainMenu.addItem(windowMenuItem)
+        let windowMenu = NSMenu(title: "Window")
+        windowMenuItem.submenu = windowMenu
+        NSApp.windowsMenu = windowMenu
+
+        windowMenu.addItem(withTitle: "Close Terminal",
+                           action: #selector(CanvasViewController.closeActiveTerminal),
+                           keyEquivalent: "w")
+        windowMenu.addItem(NSMenuItem.separator())
+        windowMenu.addItem(withTitle: "Minimize",
+                           action: #selector(NSWindow.miniaturize(_:)),
+                           keyEquivalent: "m")
+        windowMenu.addItem(withTitle: "Zoom",
+                           action: #selector(NSWindow.zoom(_:)),
+                           keyEquivalent: "")
+        windowMenu.addItem(NSMenuItem.separator())
+
+        let prevItem = NSMenuItem(title: "Previous Terminal",
+                                  action: #selector(CanvasViewController.focusPreviousTerminal),
+                                  keyEquivalent: "\u{F702}")   // NSLeftArrowFunctionKey
+        prevItem.keyEquivalentModifierMask = [.command]
+        windowMenu.addItem(prevItem)
+
+        let nextItem = NSMenuItem(title: "Next Terminal",
+                                  action: #selector(CanvasViewController.focusNextTerminal),
+                                  keyEquivalent: "\u{F703}")   // NSRightArrowFunctionKey
+        nextItem.keyEquivalentModifierMask = [.command]
+        windowMenu.addItem(nextItem)
+
+        windowMenu.addItem(NSMenuItem.separator())
+        windowMenu.addItem(withTitle: "Bring All to Front",
+                           action: #selector(NSApplication.arrangeInFront(_:)),
+                           keyEquivalent: "")
+
+        // ── Help menu ─────────────────────────────────────────────────────────
+        let helpMenuItem = NSMenuItem(title: "Help", action: nil, keyEquivalent: "")
+        mainMenu.addItem(helpMenuItem)
+        let helpMenu = NSMenu(title: "Help")
+        helpMenuItem.submenu = helpMenu
+        NSApp.helpMenu = helpMenu
+        helpMenu.addItem(withTitle: "Mosaic Help", action: nil, keyEquivalent: "?")
     }
 
     private func rebuildThemeMenuItems() {

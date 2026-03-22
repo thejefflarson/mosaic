@@ -550,16 +550,24 @@ final class ImageAnnotationView: AnnotationView {
     private let imageView = NSImageView()
     /// Absolute path to the saved PNG in Application Support/Mosaic/Images/.
     private var savedImagePath: String?
+    /// Width / height of the source image. Maintained during resize.
+    let aspectRatio: CGFloat
+    private var frameBeforeResize: CGRect = .zero
 
     init(at worldPt: CGPoint, image: NSImage) {
-        let size = CGSize(width: min(image.size.width, 400),
-                          height: min(image.size.height, 300))
+        let s = image.size
+        let ar = (s.width > 0 && s.height > 0) ? s.width / s.height : 1
+        // Scale down proportionally to fit within 400×300
+        let scale = min(1, min(400 / max(1, s.width), 300 / max(1, s.height)))
+        let size = CGSize(width: s.width * scale, height: s.height * scale)
+        aspectRatio = ar
         super.init(frame: CGRect(origin: worldPt, size: size))
         setup(image: image)
         savedImagePath = Self.persistImage(image, id: annotationID)
     }
 
     override init(frame: NSRect) {
+        aspectRatio = frame.width / max(1, frame.height)
         super.init(frame: frame)
         setup(image: NSImage())
     }
@@ -577,6 +585,81 @@ final class ImageAnnotationView: AnnotationView {
             imageView.topAnchor.constraint(equalTo: topAnchor),
             imageView.bottomAnchor.constraint(equalTo: bottomAnchor),
         ])
+        setupResizeHandles()
+    }
+
+    private func setupResizeHandles() {
+        for edge in ResizeHandleView.Edge.allCases {
+            let h = ResizeHandleView(edge: edge)
+            h.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(h)
+            h.installConstraints(in: self)
+            h.onResizeBegan = { [weak self] in self?.frameBeforeResize = self?.frame ?? .zero }
+            h.onResize = { [weak self] dx, dy in self?.handleResize(edge: edge, screenDX: dx, screenDY: dy) }
+            h.onResizeEnded = { [weak self] in
+                guard let self else { return }
+                clearSnapGuides?()
+                if frame != frameBeforeResize { onDragEnded?(frameBeforeResize, frame) }
+            }
+        }
+    }
+
+    private func handleResize(edge: ResizeHandleView.Edge, screenDX: CGFloat, screenDY: CGFloat) {
+        guard let cv = canvasView else { return }
+        let zoom = cv.currentZoom
+        let dx = screenDX / zoom
+        let dy = -screenDY / zoom
+        let minW: CGFloat = 80
+
+        // Compute unconstrained proposed frame
+        var r = frame
+        switch edge {
+        case .topLeft:
+            r.origin.x += dx; r.size.width  -= dx
+            r.origin.y += dy; r.size.height -= dy
+        case .top:
+            r.origin.y += dy; r.size.height -= dy
+        case .topRight:
+            r.size.width  += dx
+            r.origin.y    += dy; r.size.height -= dy
+        case .left:
+            r.origin.x += dx; r.size.width -= dx
+        case .right:
+            r.size.width += dx
+        case .bottomLeft:
+            r.origin.x    += dx; r.size.width  -= dx
+            r.size.height += dy
+        case .bottom:
+            r.size.height += dy
+        case .bottomRight:
+            r.size.width  += dx
+            r.size.height += dy
+        }
+
+        // Lock aspect ratio. Top/bottom edges drive from height; all others from width.
+        switch edge {
+        case .top, .bottom:
+            r.size.height = max(minW / aspectRatio, r.size.height)
+            r.size.width  = r.size.height * aspectRatio
+            if edge == .top { r.origin.y = frame.maxY - r.size.height }
+        default:
+            r.size.width  = max(minW, r.size.width)
+            r.size.height = r.size.width / aspectRatio
+            // Restore anchored edges for handles that move origin
+            switch edge {
+            case .left, .bottomLeft:
+                r.origin.x = frame.maxX - r.size.width
+            case .topRight:
+                r.origin.y = frame.maxY - r.size.height
+            case .topLeft:
+                r.origin.x = frame.maxX - r.size.width
+                r.origin.y = frame.maxY - r.size.height
+            default: break
+            }
+        }
+
+        frame = r
+        onChanged?()
     }
 
     /// Write image to disk as PNG; returns the file path or nil on failure.

@@ -62,6 +62,7 @@ private struct ToolPaletteSwiftUIView: View {
                 .foregroundStyle(active ? .white : Color(white: 0.65))
                 .background(active ? Color(white: 1, opacity: 0.15) : .clear,
                             in: RoundedRectangle(cornerRadius: 7))
+                .contentShape(RoundedRectangle(cornerRadius: 7))
         }
         .buttonStyle(.plain)
         .help(def.tooltip)
@@ -77,6 +78,7 @@ private struct ToolPaletteSwiftUIView: View {
                 .foregroundStyle(active ? .white : Color(white: 0.45))
                 .background(active ? Color(white: 1, opacity: 0.15) : .clear,
                             in: RoundedRectangle(cornerRadius: 7))
+                .contentShape(RoundedRectangle(cornerRadius: 7))
         }
         .buttonStyle(.plain)
         .help(tooltip)

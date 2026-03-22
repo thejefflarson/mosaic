@@ -66,9 +66,8 @@ final class CanvasViewController: NSViewController {
         return f
     }()
     nonisolated(unsafe) private var fpsDisplayLink: CVDisplayLink?
-    private var fpsFrameTimes: [CFTimeInterval] = []
-    /// Set from onViewportChanged; read by the display link callback to count actual draws.
     nonisolated(unsafe) private var pendingViewportUpdate = false
+    private var fpsFrameTimes: [CFTimeInterval] = []
 
     // MARK: - State
 
@@ -107,6 +106,14 @@ final class CanvasViewController: NSViewController {
         setupFPSOverlay()
         setupZoomLabel()
         setupSnapOverlay()
+        setupAccessibility()
+    }
+
+    private func setupAccessibility() {
+        canvasView.setAccessibilityLabel("Canvas")
+        canvasView.setAccessibilityRole(.scrollArea)
+        minimapView.setAccessibilityLabel("Minimap")
+        minimapView.setAccessibilityRole(.image)
     }
 
     override func viewDidAppear() {
@@ -221,10 +228,20 @@ final class CanvasViewController: NSViewController {
         CVDisplayLinkSetOutputCallback(link, { _, _, now, _, _, ctx -> CVReturn in
             guard let ctx else { return kCVReturnSuccess }
             let vc = Unmanaged<CanvasViewController>.fromOpaque(ctx).takeUnretainedValue()
-            // Only count frames where the viewport actually changed (real draws).
-            guard vc.pendingViewportUpdate else { return kCVReturnSuccess }
-            vc.pendingViewportUpdate = false
             let t = now.pointee.timeInterval
+            // Only count ticks where the canvas actually rendered a new frame.
+            // This shows real canvas FPS rather than the display's hardware refresh rate.
+            guard vc.pendingViewportUpdate else {
+                // Nothing rendered — if the last recorded frame is > 1s old, show 0.
+                DispatchQueue.main.async {
+                    vc.fpsFrameTimes.removeAll { $0 < t - 1.0 }
+                    if vc.fpsFrameTimes.isEmpty {
+                        vc.fpsLabel.stringValue = " 0 fps "
+                    }
+                }
+                return kCVReturnSuccess
+            }
+            vc.pendingViewportUpdate = false
             DispatchQueue.main.async {
                 vc.fpsFrameTimes.append(t)
                 vc.fpsFrameTimes.removeAll { $0 < t - 1.0 }
@@ -235,12 +252,13 @@ final class CanvasViewController: NSViewController {
     }
 
     @objc func toggleFPSOverlay() {
+        guard let link = fpsDisplayLink else { return }
         let showing = !fpsLabel.isHidden
         fpsLabel.isHidden = showing
         if showing {
-            CVDisplayLinkStop(fpsDisplayLink!)
+            CVDisplayLinkStop(link)
         } else {
-            CVDisplayLinkStart(fpsDisplayLink!)
+            CVDisplayLinkStart(link)
         }
     }
 
@@ -475,8 +493,9 @@ final class CanvasViewController: NSViewController {
 
     func removeAnnotation(_ av: AnnotationView) {
         undoManager?.setActionName("Delete Annotation")
-        undoManager?.registerUndo(withTarget: self) { @MainActor [weak av] vc in
-            guard let av else { return }
+        // Strong capture: av is removed from the view hierarchy below, so nothing
+        // else retains it. The undo manager must hold it alive until undo is cleared.
+        undoManager?.registerUndo(withTarget: self) { @MainActor vc in
             vc.addAnnotation(av)
         }
         annotations.removeAll { $0 === av }
@@ -533,7 +552,7 @@ final class CanvasViewController: NSViewController {
         // that don't correspond to visible rectangular boundaries, so they create
         // confusing phantom snap points near real elements.
         let boxAnnotations = annotations.filter {
-            $0 !== excludingAnnotation && ($0 is StickyNoteView || $0 is TextAnnotationView)
+            $0 !== excludingAnnotation && ($0 is StickyNoteView || $0 is TextAnnotationView || $0 is ImageAnnotationView)
         }
         return terminalManager.windows.filter { $0 !== excludingTerminal }.map(\.frame)
             + boxAnnotations.map(\.frame)
@@ -843,6 +862,40 @@ final class CanvasViewController: NSViewController {
     }
 
     // MARK: - View menu actions
+
+    // MARK: - Window menu actions
+
+    /// Close the currently active terminal. No-op if none is focused.
+    @objc func closeActiveTerminal() {
+        guard let tw = canvasView.activeTerminal else { return }
+        removeTerminal(tw)
+    }
+
+    /// Focus the next terminal (sorted left-to-right) and snap the viewport to it.
+    @objc func focusNextTerminal() {
+        let windows = terminalManager.windows.sorted { $0.frame.minX < $1.frame.minX }
+        guard !windows.isEmpty else { return }
+        let idx = canvasView.activeTerminal.flatMap { windows.firstIndex(of: $0) } ?? -1
+        snapViewportToTerminal(windows[(idx + 1) % windows.count])
+    }
+
+    /// Focus the previous terminal (sorted left-to-right) and snap the viewport to it.
+    @objc func focusPreviousTerminal() {
+        let windows = terminalManager.windows.sorted { $0.frame.minX < $1.frame.minX }
+        guard !windows.isEmpty else { return }
+        let idx = canvasView.activeTerminal.flatMap { windows.firstIndex(of: $0) } ?? 0
+        snapViewportToTerminal(windows[(idx - 1 + windows.count) % windows.count])
+    }
+
+    private func snapViewportToTerminal(_ tw: TerminalWindowView) {
+        canvasView.activateTerminal(tw)
+        tw.focusTerminal()
+        let center = CGPoint(x: tw.frame.midX, y: tw.frame.midY)
+        var vp = canvasView.viewport
+        vp.panX = -center.x * vp.zoom + canvasView.bounds.width / 2
+        vp.panY = -center.y * vp.zoom + canvasView.bounds.height / 2
+        canvasView.setViewport(vp)
+    }
 
     @objc func resetZoom() {
         let center = CGPoint(x: canvasView.bounds.midX, y: canvasView.bounds.midY)
