@@ -6,7 +6,7 @@ An infinite 2D spatial canvas for macOS where real PTY-backed terminal windows c
 
 ![macOS 14+](https://img.shields.io/badge/macOS-14%2B-blue) ![Swift 6](https://img.shields.io/badge/Swift-6.0-orange)
 
-<video src="docs/smaller.mov" controls width="100%"></video>
+<video src="https://github.com/thejefflarson/mosaic/releases/download/v0.1.0/smaller.mov" controls width="100%"></video>
 
 ## What it does
 
