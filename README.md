@@ -1,6 +1,8 @@
+<div align="center">
 <img src="Docs/icon-concept-a.svg" width="128" alt="Mosaic icon" />
 
 # Mosaic
+</div>
 
 An infinite 2D spatial canvas for macOS where real PTY-backed terminal windows can be freely panned, zoomed, dragged, and resized. Think of it as a whiteboard where every sticky note is a live shell.
 
