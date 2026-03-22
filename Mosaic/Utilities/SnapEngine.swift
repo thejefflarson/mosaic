@@ -27,28 +27,34 @@ func snapRect(_ proposed: CGRect, to others: [CGRect], threshold: CGFloat) -> Sn
 
     var bestDX: CGFloat?
     var bestWorldX: CGFloat?
+    var bestXIsMid = false
     var bestDY: CGFloat?
     var bestWorldY: CGFloat?
+    var bestYIsMid = false
 
     for other in others {
         let refX: [CGFloat] = [other.minX, other.midX, other.maxX]
         let refY: [CGFloat] = [other.minY, other.midY, other.maxY]
 
         for px in movingX {
-            for ox in refX {
+            for (xi, ox) in refX.enumerated() {
                 let d = ox - px
-                if abs(d) < threshold, bestDX == nil || abs(d) < abs(bestDX!) {
-                    bestDX = d
-                    bestWorldX = ox
+                let isMid = xi == 1
+                if abs(d) < threshold {
+                    if bestDX == nil || abs(d) < abs(bestDX!) || (abs(d) == abs(bestDX!) && bestXIsMid && !isMid) {
+                        bestDX = d; bestWorldX = ox; bestXIsMid = isMid
+                    }
                 }
             }
         }
         for py in movingY {
-            for oy in refY {
+            for (yi, oy) in refY.enumerated() {
                 let d = oy - py
-                if abs(d) < threshold, bestDY == nil || abs(d) < abs(bestDY!) {
-                    bestDY = d
-                    bestWorldY = oy
+                let isMid = yi == 1
+                if abs(d) < threshold {
+                    if bestDY == nil || abs(d) < abs(bestDY!) || (abs(d) == abs(bestDY!) && bestYIsMid && !isMid) {
+                        bestDY = d; bestWorldY = oy; bestYIsMid = isMid
+                    }
                 }
             }
         }

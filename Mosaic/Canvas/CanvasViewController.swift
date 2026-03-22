@@ -470,34 +470,40 @@ final class CanvasViewController: NSViewController {
         }
         av.onDragEnded = { [weak self, weak av] fromFrame, _ in
             guard let self, let av else { return }
+            undoManager?.beginUndoGrouping()
             undoManager?.setActionName("Move")
             undoManager?.registerUndo(withTarget: self) { @MainActor [weak av] vc in
                 guard let av else { return }
                 vc.moveAnnotation(av, to: fromFrame)
             }
+            undoManager?.endUndoGrouping()
         }
         av.snapFrame = { [weak self, weak av] proposed in
             guard let self else { return proposed }
             return self.snapPosition(proposed, excludingAnnotation: av)
         }
         av.clearSnapGuides = { [weak self] in self?.snapOverlay.guides = [] }
+        undoManager?.beginUndoGrouping()
         undoManager?.setActionName("Add Annotation")
         undoManager?.registerUndo(withTarget: self) { @MainActor [weak av] vc in
             guard let av else { return }
             vc.removeAnnotation(av)
         }
+        undoManager?.endUndoGrouping()
         annotations.append(av)
         canvasView.addAnnotation(av)
         minimapView.update(viewport: canvasView.viewport, windows: terminalManager.windows, annotations: annotations)
     }
 
     func removeAnnotation(_ av: AnnotationView) {
+        undoManager?.beginUndoGrouping()
         undoManager?.setActionName("Delete Annotation")
         // Strong capture: av is removed from the view hierarchy below, so nothing
         // else retains it. The undo manager must hold it alive until undo is cleared.
         undoManager?.registerUndo(withTarget: self) { @MainActor vc in
             vc.addAnnotation(av)
         }
+        undoManager?.endUndoGrouping()
         annotations.removeAll { $0 === av }
         canvasView.removeAnnotation(av)
         minimapView.update(viewport: canvasView.viewport, windows: terminalManager.windows, annotations: annotations)
@@ -506,11 +512,13 @@ final class CanvasViewController: NSViewController {
 
     func moveAnnotation(_ av: AnnotationView, to newFrame: CGRect) {
         let oldFrame = av.frame
+        undoManager?.beginUndoGrouping()
         undoManager?.setActionName("Move")
         undoManager?.registerUndo(withTarget: self) { @MainActor [weak av] vc in
             guard let av else { return }
             vc.moveAnnotation(av, to: oldFrame)
         }
+        undoManager?.endUndoGrouping()
         av.frame = newFrame
         minimapView.update(viewport: canvasView.viewport, windows: terminalManager.windows, annotations: annotations)
         scheduleSave()

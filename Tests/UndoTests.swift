@@ -26,6 +26,9 @@ final class UndoTests: XCTestCase {
         vc.loadViewIfNeeded()
         // Clear any undo actions accumulated during view setup.
         vc.undoManager?.removeAllActions()
+        // Tests have no run loop, so groupsByEvent collapses all registrations into one
+        // group. Disable it; production code uses explicit begin/end grouping instead.
+        vc.undoManager?.groupsByEvent = false
     }
 
     override func tearDown() {
@@ -167,6 +170,7 @@ final class UndoTests: XCTestCase {
         vc.undoManager?.removeAllActions()
 
         vc.moveAnnotation(av, to: frameB)
+
         vc.moveAnnotation(av, to: frameC)
         XCTAssertEqual(av.frame, frameC)
 
@@ -188,6 +192,7 @@ final class UndoTests: XCTestCase {
         vc.undoManager?.removeAllActions()
 
         vc.moveAnnotation(av, to: frameB)
+
         vc.moveAnnotation(av, to: frameC)
         vc.undoManager?.undo()
         vc.undoManager?.undo()
@@ -215,6 +220,7 @@ final class UndoTests: XCTestCase {
         let a1 = makeTextAnnotation()
         let a2 = makeStickyNote()
         vc.addAnnotation(a1)
+
         vc.addAnnotation(a2)
         XCTAssertEqual(vc.annotationCount, 2)
 
