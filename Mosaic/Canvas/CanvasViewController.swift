@@ -1,0 +1,915 @@
+import AppKit
+import CoreVideo
+
+// MARK: - Snap guide overlay
+
+/// Transparent view that draws alignment guide lines during drag operations.
+private final class SnapGuideOverlay: NSView {
+    var guides: [(isVertical: Bool, pos: CGFloat)] = [] { didSet { needsDisplay = true } }
+
+    override var isFlipped: Bool { true }
+    override var isOpaque: Bool { false }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard !guides.isEmpty else { return }
+        let path = NSBezierPath()
+        path.lineWidth = 1
+        path.setLineDash([5, 3], count: 2, phase: 0)
+        for guide in guides {
+            if guide.isVertical {
+                path.move(to: NSPoint(x: guide.pos, y: 0))
+                path.line(to: NSPoint(x: guide.pos, y: bounds.height))
+            } else {
+                path.move(to: NSPoint(x: 0, y: guide.pos))
+                path.line(to: NSPoint(x: bounds.width, y: guide.pos))
+            }
+        }
+        NSColor.systemBlue.withAlphaComponent(0.75).setStroke()
+        path.stroke()
+    }
+}
+
+private extension CVTimeStamp {
+    var timeInterval: CFTimeInterval { CFTimeInterval(videoTime) / CFTimeInterval(videoTimeScale) }
+}
+
+final class CanvasViewController: NSViewController {
+
+    private static let defaultShell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
+
+    // MARK: - Subviews
+
+    private let canvasView = CanvasView()
+    private let minimapView = MinimapView()
+    private let terminalManager = TerminalManager()
+    private let toolPalette = ToolPaletteView()
+    private let fpsLabel: NSTextField = {
+        let f = NSTextField(labelWithString: "")
+        f.font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .medium)
+        f.textColor = NSColor(white: 1, alpha: 0.6)
+        f.backgroundColor = NSColor(white: 0, alpha: 0.45)
+        f.drawsBackground = true
+        f.isBezeled = false
+        f.isHidden = true
+        f.translatesAutoresizingMaskIntoConstraints = false
+        return f
+    }()
+    private let zoomLabel: NSTextField = {
+        let f = NSTextField(labelWithString: "100%")
+        f.font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .medium)
+        f.textColor = NSColor(white: 1, alpha: 0.5)
+        f.backgroundColor = NSColor(white: 0, alpha: 0.35)
+        f.drawsBackground = true
+        f.isBezeled = false
+        f.translatesAutoresizingMaskIntoConstraints = false
+        return f
+    }()
+    nonisolated(unsafe) private var fpsDisplayLink: CVDisplayLink?
+    private var fpsFrameTimes: [CFTimeInterval] = []
+    /// Set from onViewportChanged; read by the display link callback to count actual draws.
+    nonisolated(unsafe) private var pendingViewportUpdate = false
+
+    // MARK: - State
+
+    private var broadcastMode = false
+    private var saveDebounceTimer: Timer?
+    private var workspaceRestored = false
+    private var currentTheme: Theme = {
+        let id = UserDefaults.standard.string(forKey: "themeID") ?? Theme.dark.id
+        return Theme.allThemes.first { $0.id == id } ?? .dark
+    }()
+
+    private var themeEditorWindow: NSWindow?
+    private var terminalSettingsWindow: NSWindow?
+    private var deleteSelectionStart: CGPoint?
+
+    /// All live annotation views (in world space).
+    private var annotations: [AnnotationView] = []
+    /// In-progress annotation during freehand/arrow draw.
+    private var activeAnnotation: AnnotationView?
+
+    // MARK: - Lifecycle
+
+    deinit {
+        if let link = fpsDisplayLink { CVDisplayLinkStop(link) }
+    }
+
+    override func loadView() {
+        view = NSView(frame: NSRect(x: 0, y: 0, width: 1440, height: 900))
+    }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        setupCanvas()
+        setupMinimap()
+        setupToolPalette()
+        setupFPSOverlay()
+        setupZoomLabel()
+        setupSnapOverlay()
+    }
+
+    override func viewDidAppear() {
+        super.viewDidAppear()
+        guard !workspaceRestored else { return }
+        workspaceRestored = true
+        restoreWorkspace()
+    }
+
+    // MARK: - Setup
+
+    private func setupCanvas() {
+        canvasView.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(canvasView)
+        NSLayoutConstraint.activate([
+            canvasView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            canvasView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            canvasView.topAnchor.constraint(equalTo: view.topAnchor),
+            canvasView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+        ])
+
+        canvasView.setCanvasBackground(currentTheme.canvasBackground)
+
+        canvasView.onBackgroundDoubleClick = { [weak self] worldPt in
+            self?.spawnTerminal(at: worldPt)
+        }
+
+        canvasView.onViewportChanged = { [weak self] vp in
+            guard let self else { return }
+            minimapView.update(viewport: vp, windows: terminalManager.windows, annotations: annotations)
+            updateZoomLabel()
+            scheduleSave()
+            pendingViewportUpdate = true
+        }
+    }
+
+    private func setupToolPalette() {
+        toolPalette.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(toolPalette)
+        NSLayoutConstraint.activate([
+            toolPalette.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            toolPalette.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -20),
+        ])
+
+        toolPalette.onToolSelected = { [weak self] tool in
+            self?.canvasView.activeTool = tool
+        }
+
+        toolPalette.onSnappingToggled = { [weak self] enabled in
+            self?.snappingEnabled = enabled
+        }
+
+        canvasView.onToolBegan = { [weak self] tool, worldPt in
+            self?.handleToolBegan(tool, at: worldPt)
+        }
+        canvasView.onToolMoved = { [weak self] tool, worldPt in
+            self?.handleToolMoved(tool, at: worldPt)
+        }
+        canvasView.onToolEnded = { [weak self] tool, worldPt in
+            self?.handleToolEnded(tool, at: worldPt)
+        }
+    }
+
+    private func setupMinimap() {
+        minimapView.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(minimapView)
+        NSLayoutConstraint.activate([
+            minimapView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16),
+            minimapView.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -16),
+            minimapView.widthAnchor.constraint(equalToConstant: 180),
+            minimapView.heightAnchor.constraint(equalToConstant: 120),
+        ])
+
+        minimapView.canvasView = canvasView
+
+        minimapView.onPanToWorld = { [weak self] worldPt in
+            guard let self else { return }
+            var vp = canvasView.viewport
+            vp.panX = -worldPt.x * vp.zoom + canvasView.bounds.width / 2
+            vp.panY = -worldPt.y * vp.zoom + canvasView.bounds.height / 2
+            canvasView.setViewport(vp)
+        }
+    }
+
+    // MARK: - Zoom label
+
+    private func setupZoomLabel() {
+        view.addSubview(zoomLabel)
+        NSLayoutConstraint.activate([
+            zoomLabel.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 8),
+            zoomLabel.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -8),
+        ])
+        updateZoomLabel()
+    }
+
+    private func updateZoomLabel() {
+        let pct = Int((canvasView.viewport.zoom * 100).rounded())
+        zoomLabel.stringValue = " \(pct)% "
+    }
+
+    // MARK: - FPS overlay
+
+    private func setupFPSOverlay() {
+        view.addSubview(fpsLabel)
+        NSLayoutConstraint.activate([
+            fpsLabel.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -8),
+            fpsLabel.topAnchor.constraint(equalTo: view.topAnchor, constant: 8),
+        ])
+
+        CVDisplayLinkCreateWithActiveCGDisplays(&fpsDisplayLink)
+        guard let link = fpsDisplayLink else { return }
+        CVDisplayLinkSetOutputCallback(link, { _, _, now, _, _, ctx -> CVReturn in
+            guard let ctx else { return kCVReturnSuccess }
+            let vc = Unmanaged<CanvasViewController>.fromOpaque(ctx).takeUnretainedValue()
+            // Only count frames where the viewport actually changed (real draws).
+            guard vc.pendingViewportUpdate else { return kCVReturnSuccess }
+            vc.pendingViewportUpdate = false
+            let t = now.pointee.timeInterval
+            DispatchQueue.main.async {
+                vc.fpsFrameTimes.append(t)
+                vc.fpsFrameTimes.removeAll { $0 < t - 1.0 }
+                vc.fpsLabel.stringValue = " \(vc.fpsFrameTimes.count) fps "
+            }
+            return kCVReturnSuccess
+        }, Unmanaged.passUnretained(self).toOpaque())
+    }
+
+    @objc func toggleFPSOverlay() {
+        let showing = !fpsLabel.isHidden
+        fpsLabel.isHidden = showing
+        if showing {
+            CVDisplayLinkStop(fpsDisplayLink!)
+        } else {
+            CVDisplayLinkStart(fpsDisplayLink!)
+        }
+    }
+
+    // MARK: - Terminal spawning
+
+    @objc func spawnTerminalAtCenter() {
+        let center = canvasView.viewport.screenToWorld(
+            CGPoint(x: canvasView.bounds.midX, y: canvasView.bounds.midY)
+        )
+        spawnTerminal(at: center)
+    }
+
+    private func spawnTerminal(at worldPt: CGPoint, shell: String = CanvasViewController.defaultShell, cwd: String? = nil) {
+        let size = CGSize(width: 600, height: 400)
+        let origin = CGPoint(x: worldPt.x - size.width / 2, y: worldPt.y - size.height / 2)
+        let frame = CGRect(origin: origin, size: size)
+        spawnTerminalWithFrame(frame, shell: shell, cwd: cwd)
+    }
+
+    private func spawnTerminalWithFrame(_ frame: CGRect, shell: String = CanvasViewController.defaultShell, cwd: String? = nil, scrollback: String? = nil) {
+
+        let tw = terminalManager.spawn(frame: frame, shell: shell, cwd: cwd)
+        tw.restoredScrollback = scrollback
+        tw.canvasView = canvasView
+        tw.theme = currentTheme
+
+        tw.onClose = { [weak self, weak tw] in
+            guard let self, let tw else { return }
+            self.removeTerminal(tw)
+        }
+
+        tw.onMoved = { [weak self] in
+            self?.minimapView.update(viewport: self?.canvasView.viewport ?? Viewport(),
+                                     windows: self?.terminalManager.windows ?? [],
+                                     annotations: self?.annotations ?? [])
+            self?.scheduleSave()
+        }
+
+        tw.onMoveEnded = { [weak self, weak tw] fromFrame, toFrame in
+            guard let self, let tw else { return }
+            undoManager?.setActionName("Move Terminal")
+            undoManager?.registerUndo(withTarget: self) { vc in
+                vc.moveTerminal(tw, to: fromFrame)
+            }
+        }
+        tw.snapFrame = { [weak self, weak tw] proposed in
+            guard let self else { return proposed }
+            return self.snapPosition(proposed, excludingTerminal: tw)
+        }
+        tw.clearSnapGuides = { [weak self] in self?.snapOverlay.guides = [] }
+
+        tw.onBroadcastKey = { [weak self] data in
+            self?.broadcastKeyData(data, excluding: tw)
+        }
+
+        canvasView.addTerminal(tw)
+        canvasView.activateTerminal(tw)
+        tw.focusTerminal()
+
+        undoManager?.setActionName("New Terminal")
+        undoManager?.registerUndo(withTarget: self) { [weak tw] vc in
+            guard let tw else { return }
+            vc.removeTerminal(tw)
+        }
+
+        minimapView.update(viewport: canvasView.viewport, windows: terminalManager.windows, annotations: annotations)
+        scheduleSave()
+    }
+
+    private func removeTerminal(_ tw: TerminalWindowView) {
+        let savedFrame = tw.frame
+        let savedShell = tw.shell
+        let savedCwd   = tw.currentCwd
+        undoManager?.setActionName("Close Terminal")
+        undoManager?.registerUndo(withTarget: self) { vc in
+            vc.spawnTerminalWithFrame(savedFrame, shell: savedShell, cwd: savedCwd)
+        }
+        terminalManager.kill(tw)
+        minimapView.update(viewport: canvasView.viewport,
+                           windows: terminalManager.windows,
+                           annotations: annotations)
+        scheduleSave()
+    }
+
+    private func moveTerminal(_ tw: TerminalWindowView, to newFrame: CGRect) {
+        let oldFrame = tw.frame
+        undoManager?.setActionName("Move Terminal")
+        undoManager?.registerUndo(withTarget: self) { [weak tw] vc in
+            guard let tw else { return }
+            vc.moveTerminal(tw, to: oldFrame)
+        }
+        tw.frame = newFrame
+        minimapView.update(viewport: canvasView.viewport,
+                           windows: terminalManager.windows,
+                           annotations: annotations)
+        scheduleSave()
+    }
+
+    // MARK: - Annotation tool handling
+
+    private func handleToolBegan(_ tool: CanvasTool, at worldPt: CGPoint) {
+        switch tool {
+        case .pointer: break
+
+        case .delete:
+            deleteSelectionStart = worldPt
+            canvasView.setSelectionRect(CGRect(origin: worldPt, size: .zero))
+
+        case .terminal:
+            spawnTerminal(at: worldPt)
+            setTool(.pointer)
+
+        case .text:
+            let av = TextAnnotationView(at: worldPt)
+            av.textColor = currentTheme.annotationColor
+            av.annotationFont = currentTheme.annotationFont
+            addAnnotation(av)
+            av.beginEditing()
+
+        case .stickyNote:
+            let av = StickyNoteView(at: worldPt)
+            av.themeForeground = currentTheme.stickyForeground
+            av.themeBackground = currentTheme.stickyBackground
+            addAnnotation(av)
+            av.beginEditing()
+
+        case .arrow:
+            let av = ArrowAnnotationView(start: worldPt, end: worldPt)
+            av.strokeColor = currentTheme.annotationColor
+            activeAnnotation = av
+            addAnnotation(av)
+
+        case .pen:
+            let av = FreehandAnnotationView(at: worldPt)
+            av.strokeColor = currentTheme.annotationColor
+            activeAnnotation = av
+            addAnnotation(av)
+
+        case .image:
+            pickImage(at: worldPt)
+        }
+    }
+
+    private func handleToolMoved(_ tool: CanvasTool, at worldPt: CGPoint) {
+        switch tool {
+        case .delete:
+            guard let start = deleteSelectionStart else { return }
+            canvasView.setSelectionRect(selectionRect(from: start, to: worldPt))
+        case .arrow:
+            (activeAnnotation as? ArrowAnnotationView)?.updateEnd(worldPt)
+            minimapView.update(viewport: canvasView.viewport, windows: terminalManager.windows, annotations: annotations)
+        case .pen:
+            (activeAnnotation as? FreehandAnnotationView)?.addWorldPoint(worldPt)
+            minimapView.update(viewport: canvasView.viewport, windows: terminalManager.windows, annotations: annotations)
+        default: break
+        }
+    }
+
+    private func handleToolEnded(_ tool: CanvasTool, at worldPt: CGPoint) {
+        switch tool {
+        case .delete:
+            canvasView.setSelectionRect(nil)
+            guard let start = deleteSelectionStart else { break }
+            deleteSelectionStart = nil
+            let rect = selectionRect(from: start, to: worldPt)
+            if rect.width < 5 && rect.height < 5 {
+                // Single click — point hit test
+                if let tw = terminalManager.windows.first(where: { $0.frame.contains(worldPt) }) {
+                    tw.onClose?()
+                } else if let av = annotations.first(where: { $0.frame.contains(worldPt) }) {
+                    removeAnnotation(av)
+                }
+            } else {
+                // Drag — delete everything intersecting the selection rect
+                for tw in terminalManager.windows.filter({ rect.intersects($0.frame) }) { tw.onClose?() }
+                for av in annotations.filter({ rect.intersects($0.frame) }) { removeAnnotation(av) }
+            }
+        case .arrow:
+            (activeAnnotation as? ArrowAnnotationView)?.updateEnd(worldPt)
+        default: break
+        }
+        activeAnnotation = nil
+        scheduleSave()
+    }
+
+    private func selectionRect(from a: CGPoint, to b: CGPoint) -> CGRect {
+        CGRect(x: min(a.x, b.x), y: min(a.y, b.y),
+               width: abs(b.x - a.x), height: abs(b.y - a.y))
+    }
+
+    private func addAnnotation(_ av: AnnotationView) {
+        av.onDelete = { [weak self, weak av] in
+            guard let av else { return }
+            self?.removeAnnotation(av)
+        }
+        av.onChanged = { [weak self] in
+            self?.minimapView.update(viewport: self?.canvasView.viewport ?? Viewport(),
+                                     windows: self?.terminalManager.windows ?? [],
+                                     annotations: self?.annotations ?? [])
+            self?.scheduleSave()
+        }
+        av.onDragEnded = { [weak self, weak av] fromFrame, _ in
+            guard let self, let av else { return }
+            undoManager?.setActionName("Move")
+            undoManager?.registerUndo(withTarget: self) { [weak av] vc in
+                guard let av else { return }
+                vc.moveAnnotation(av, to: fromFrame)
+            }
+        }
+        av.snapFrame = { [weak self, weak av] proposed in
+            guard let self else { return proposed }
+            return self.snapPosition(proposed, excludingAnnotation: av)
+        }
+        av.clearSnapGuides = { [weak self] in self?.snapOverlay.guides = [] }
+        undoManager?.setActionName("Add Annotation")
+        undoManager?.registerUndo(withTarget: self) { [weak av] vc in
+            guard let av else { return }
+            vc.removeAnnotation(av)
+        }
+        annotations.append(av)
+        canvasView.addAnnotation(av)
+        minimapView.update(viewport: canvasView.viewport, windows: terminalManager.windows, annotations: annotations)
+    }
+
+    private func removeAnnotation(_ av: AnnotationView) {
+        undoManager?.setActionName("Delete Annotation")
+        undoManager?.registerUndo(withTarget: self) { [weak av] vc in
+            guard let av else { return }
+            vc.addAnnotation(av)
+        }
+        annotations.removeAll { $0 === av }
+        canvasView.removeAnnotation(av)
+        minimapView.update(viewport: canvasView.viewport, windows: terminalManager.windows, annotations: annotations)
+        scheduleSave()
+    }
+
+    private func moveAnnotation(_ av: AnnotationView, to newFrame: CGRect) {
+        let oldFrame = av.frame
+        undoManager?.setActionName("Move")
+        undoManager?.registerUndo(withTarget: self) { [weak av] vc in
+            guard let av else { return }
+            vc.moveAnnotation(av, to: oldFrame)
+        }
+        av.frame = newFrame
+        minimapView.update(viewport: canvasView.viewport, windows: terminalManager.windows, annotations: annotations)
+        scheduleSave()
+    }
+
+    private func pickImage(at worldPt: CGPoint) {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.image]
+        panel.allowsMultipleSelection = false
+        panel.begin { [weak self] response in
+            guard let self, response == .OK, let url = panel.url,
+                  let image = NSImage(contentsOf: url) else { return }
+            let av = ImageAnnotationView(at: worldPt, image: image)
+            addAnnotation(av)
+        }
+    }
+
+    // MARK: - Snap overlay
+
+    private var snappingEnabled: Bool = true
+    private let snapOverlay = SnapGuideOverlay()
+
+    private func setupSnapOverlay() {
+        snapOverlay.translatesAutoresizingMaskIntoConstraints = false
+        snapOverlay.isHidden = false
+        view.addSubview(snapOverlay, positioned: .above, relativeTo: canvasView)
+        NSLayoutConstraint.activate([
+            snapOverlay.leadingAnchor.constraint(equalTo: canvasView.leadingAnchor),
+            snapOverlay.trailingAnchor.constraint(equalTo: canvasView.trailingAnchor),
+            snapOverlay.topAnchor.constraint(equalTo: canvasView.topAnchor),
+            snapOverlay.bottomAnchor.constraint(equalTo: canvasView.bottomAnchor),
+        ])
+    }
+
+    private func allElementFrames(excludingAnnotation: AnnotationView? = nil,
+                                   excludingTerminal: TerminalWindowView? = nil) -> [CGRect] {
+        // Only use bounding-box annotations (sticky notes, text) as snap references.
+        // Drawing annotations (arrows, freehand, images) have padded or irregular frames
+        // that don't correspond to visible rectangular boundaries, so they create
+        // confusing phantom snap points near real elements.
+        let boxAnnotations = annotations.filter {
+            $0 !== excludingAnnotation && ($0 is StickyNoteView || $0 is TextAnnotationView)
+        }
+        return terminalManager.windows.filter { $0 !== excludingTerminal }.map(\.frame)
+            + boxAnnotations.map(\.frame)
+    }
+
+    private func snapPosition(_ proposed: CGRect,
+                               excludingAnnotation: AnnotationView? = nil,
+                               excludingTerminal: TerminalWindowView? = nil) -> CGRect {
+        guard snappingEnabled else { return proposed }
+        let threshold = 4.0 / canvasView.viewport.zoom
+        let others = allElementFrames(excludingAnnotation: excludingAnnotation,
+                                      excludingTerminal: excludingTerminal)
+
+        // All three lines of the moving element can snap to all three lines of any
+        // reference element: outer edges (min/max) and centre line (mid).
+        let movingX: [CGFloat] = [proposed.minX, proposed.midX, proposed.maxX]
+        let movingY: [CGFloat] = [proposed.minY, proposed.midY, proposed.maxY]
+
+        var bestDX: (delta: CGFloat, worldX: CGFloat)?
+        var bestDY: (delta: CGFloat, worldY: CGFloat)?
+
+        for other in others {
+            let refX: [CGFloat] = [other.minX, other.midX, other.maxX]
+            let refY: [CGFloat] = [other.minY, other.midY, other.maxY]
+
+            for px in movingX {
+                for ox in refX {
+                    let d = ox - px
+                    if abs(d) < threshold, bestDX == nil || abs(d) < abs(bestDX!.delta) {
+                        bestDX = (d, ox)
+                    }
+                }
+            }
+            for py in movingY {
+                for oy in refY {
+                    let d = oy - py
+                    if abs(d) < threshold, bestDY == nil || abs(d) < abs(bestDY!.delta) {
+                        bestDY = (d, oy)
+                    }
+                }
+            }
+        }
+
+        var result = proposed
+        var guides: [(isVertical: Bool, pos: CGFloat)] = []
+        if let b = bestDX {
+            result.origin.x += b.delta
+            guides.append((true, canvasView.viewport.worldToScreen(CGPoint(x: b.worldX, y: 0)).x))
+        }
+        if let b = bestDY {
+            result.origin.y += b.delta
+            guides.append((false, canvasView.viewport.worldToScreen(CGPoint(x: 0, y: b.worldY)).y))
+        }
+        snapOverlay.guides = guides
+        return result
+    }
+
+    @objc func toggleSnapping() {
+        snappingEnabled.toggle()
+        toolPalette.snappingEnabled = snappingEnabled
+    }
+
+    // MARK: - Tool keyboard shortcuts
+
+    override func keyDown(with event: NSEvent) {
+        // Only handle shortcuts when the canvas itself has focus (not a text field or terminal).
+        guard view.window?.firstResponder === canvasView ||
+              view.window?.firstResponder === view else {
+            super.keyDown(with: event)
+            return
+        }
+        // Don't intercept when a modifier is held — lets Cmd+V, Cmd+C, etc. pass through.
+        guard event.modifierFlags.intersection([.command, .option, .control]).isEmpty else {
+            super.keyDown(with: event)
+            return
+        }
+        switch event.charactersIgnoringModifiers?.lowercased() {
+        case "v": setTool(.pointer)
+        case "t": setTool(.terminal)
+        case "l": setTool(.text)
+        case "n": setTool(.stickyNote)
+        case "a": setTool(.arrow)
+        case "p": setTool(.pen)
+        case "i": setTool(.image)
+        case "x": setTool(.delete)
+        default:  super.keyDown(with: event)
+        }
+    }
+
+    private func setTool(_ tool: CanvasTool) {
+        canvasView.activeTool = tool
+        toolPalette.selectTool(tool)
+    }
+
+    // MARK: - Themes
+
+    @objc func selectTheme(_ sender: NSMenuItem) {
+        let theme = Theme.allThemes[sender.tag]
+        applyTheme(theme)
+    }
+
+    private func applyTheme(_ theme: Theme) {
+        currentTheme = theme
+        UserDefaults.standard.set(theme.id, forKey: "themeID")
+        canvasView.setCanvasBackground(theme.canvasBackground)
+        for w in terminalManager.windows { w.applyTheme(theme) }
+        for av in annotations {
+            switch av {
+            case let sv as StickyNoteView:
+                sv.themeForeground = theme.stickyForeground
+                sv.themeBackground = theme.stickyBackground
+            case let tv as TextAnnotationView:
+                tv.textColor = theme.annotationColor
+                tv.annotationFont = theme.annotationFont
+            case let ar as ArrowAnnotationView:
+                ar.strokeColor = theme.annotationColor
+            case let fh as FreehandAnnotationView:
+                fh.strokeColor = theme.annotationColor
+            default:
+                break
+            }
+        }
+        minimapView.update(viewport: canvasView.viewport, windows: terminalManager.windows, annotations: annotations)
+    }
+
+    @objc func openThemeEditor() {
+        if let existing = themeEditorWindow {
+            existing.makeKeyAndOrderFront(nil)
+            return
+        }
+
+        let vc = ThemeEditorViewController(theme: currentTheme)
+
+        vc.onApply = { [weak self] theme in
+            guard let self else { return }
+            // Auto-save: if this is an existing custom theme, update it in-place.
+            var custom = Theme.customThemes
+            if custom.contains(where: { $0.id == theme.id }) {
+                custom.removeAll { $0.id == theme.id }
+                custom.append(theme)
+                Theme.customThemes = custom
+                NotificationCenter.default.post(name: .themesDidChange, object: nil)
+            }
+            applyTheme(theme)
+        }
+
+        vc.onSave = { [weak self] theme in
+            guard let self else { return }
+            var custom = Theme.customThemes
+            custom.removeAll { $0.name == theme.name }
+            custom.append(theme)
+            Theme.customThemes = custom
+            applyTheme(theme)
+            NotificationCenter.default.post(name: .themesDidChange, object: nil)
+        }
+
+        vc.sizingOptions = [.preferredContentSize]
+
+        let panel = NSPanel(
+            contentRect: .zero,
+            styleMask:   [.titled, .closable, .resizable],
+            backing:     .buffered,
+            defer:       false
+        )
+        panel.title = "Theme Editor"
+        panel.contentViewController = vc
+        panel.isFloatingPanel = true
+        panel.hidesOnDeactivate = false
+        panel.center()
+        panel.makeKeyAndOrderFront(nil)
+
+        NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification,
+                                               object: panel, queue: .main) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.themeEditorWindow = nil }
+        }
+        themeEditorWindow = panel
+    }
+
+    @objc func openTerminalSettings() {
+        if let existing = terminalSettingsWindow {
+            existing.makeKeyAndOrderFront(nil)
+            return
+        }
+
+        let vc = TerminalSettingsViewController()
+        vc.onApply = { [weak self] settings in
+            self?.terminalManager.windows.forEach { $0.applyTerminalSettings(settings) }
+        }
+        vc.sizingOptions = [.preferredContentSize]
+
+        let panel = NSPanel(
+            contentRect: .zero,
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        panel.title = "Terminal Settings"
+        panel.contentViewController = vc
+        panel.isFloatingPanel = true
+        panel.hidesOnDeactivate = false
+        panel.center()
+        panel.makeKeyAndOrderFront(nil)
+
+        NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification,
+                                               object: panel, queue: .main) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.terminalSettingsWindow = nil }
+        }
+        terminalSettingsWindow = panel
+    }
+
+    // MARK: - Broadcast
+
+    @objc func toggleBroadcast() {
+        broadcastMode.toggle()
+        canvasView.broadcastModeActive = broadcastMode
+        for w in terminalManager.windows {
+            w.setBroadcastHighlight(broadcastMode)
+        }
+        // Ensure a terminal has focus so typing broadcasts immediately
+        if broadcastMode, let first = terminalManager.windows.first {
+            first.focusTerminal()
+        }
+    }
+
+    private func broadcastKeyData(_ data: Data, excluding source: TerminalWindowView) {
+        guard broadcastMode else { return }
+        for w in terminalManager.windows where w !== source {
+            w.sendInput(data)
+        }
+    }
+
+    // MARK: - Workspace persistence
+
+    private func restoreWorkspace() {
+        undoManager?.disableUndoRegistration()
+        defer { undoManager?.enableUndoRegistration() }
+
+        guard let snapshot = WorkspaceStore.shared.load() else {
+            // First launch: spawn one terminal in the center
+            spawnTerminalAtCenter()
+            return
+        }
+
+        for w in snapshot.windows {
+            spawnTerminalWithFrame(
+                CGRect(x: w.x, y: w.y, width: w.width, height: w.height),
+                cwd: w.cwd,
+                scrollback: w.scrollback
+            )
+        }
+
+        for s in snapshot.annotations {
+            restoreAnnotation(s)
+        }
+
+        zoomToFitAllElements()
+    }
+
+    private func zoomToFitAllElements() {
+        let frames = terminalManager.windows.map(\.frame) + annotations.map(\.frame)
+        guard let first = frames.first else { return }
+        let worldBounds = frames.dropFirst().reduce(first) { $0.union($1) }
+        var vp = Viewport()
+        vp.zoomToFit(worldBounds: worldBounds, screenSize: canvasView.bounds.size)
+        canvasView.setViewport(vp)
+    }
+
+    private func restoreAnnotation(_ s: AnnotationSnapshot) {
+        let frame = CGRect(x: s.x, y: s.y, width: s.width, height: s.height)
+        switch s.kind {
+        case .text:
+            let av = TextAnnotationView(at: frame.origin, text: s.content ?? "")
+            av.frame = frame
+            av.textColor = currentTheme.annotationColor
+            av.annotationFont = currentTheme.annotationFont
+            addAnnotation(av)
+
+        case .stickyNote:
+            let color = StickyNoteView.NoteColor(rawValue: s.colorName ?? "yellow") ?? .yellow
+            let av = StickyNoteView(at: frame.origin, color: color, text: s.content ?? "")
+            av.frame = frame
+            av.themeForeground = currentTheme.stickyForeground
+            av.themeBackground = currentTheme.stickyBackground
+            addAnnotation(av)
+
+        case .arrow:
+            guard let pts = s.points, pts.count >= 2 else { return }
+            let av = ArrowAnnotationView(start: CGPoint(x: pts[0].x, y: pts[0].y),
+                                         end:   CGPoint(x: pts[1].x, y: pts[1].y))
+            av.strokeColor = currentTheme.annotationColor
+            addAnnotation(av)
+
+        case .freehand:
+            guard let pts = s.points else { return }
+            let av = FreehandAnnotationView(at: CGPoint(x: s.x, y: s.y))
+            av.loadWorldPoints(pts.map { CGPoint(x: $0.x, y: $0.y) })
+            av.strokeWidth = s.lineWidth ?? 2
+            av.strokeColor = currentTheme.annotationColor
+            addAnnotation(av)
+
+        case .image:
+            guard let path = s.imagePath,
+                  let image = NSImage(contentsOfFile: path) else { return }
+            let av = ImageAnnotationView(at: frame.origin, image: image)
+            av.frame = frame
+            addAnnotation(av)
+        }
+    }
+
+    private func scheduleSave() {
+        saveDebounceTimer?.invalidate()
+        saveDebounceTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: false) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.saveWorkspace() }
+        }
+    }
+
+    @objc func saveWorkspace() {
+        let windowSnapshots = terminalManager.windows.map { w -> WorkspaceSnapshot.WindowSnapshot in
+            WorkspaceSnapshot.WindowSnapshot(
+                id: w.id,
+                x: w.frame.origin.x,
+                y: w.frame.origin.y,
+                width: w.frame.width,
+                height: w.frame.height,
+                shell: w.shell,
+                cwd: w.currentCwd,
+                title: w.currentTitle,
+                scrollback: w.extractScrollbackText()
+            )
+        }
+        let annotationSnapshots = annotations.compactMap { $0.toSnapshot() }
+        let vp = canvasView.viewport
+        let snapshot = WorkspaceSnapshot(
+            viewport: WorkspaceSnapshot.ViewportState(panX: vp.panX, panY: vp.panY, zoom: vp.zoom),
+            windows: windowSnapshots,
+            annotations: annotationSnapshots
+        )
+        WorkspaceStore.shared.save(snapshot)
+    }
+
+    // MARK: - View menu actions
+
+    @objc func resetZoom() {
+        let center = CGPoint(x: canvasView.bounds.midX, y: canvasView.bounds.midY)
+        var vp = canvasView.viewport
+        vp.zoomAround(screenAnchor: center, factor: 1.0 / vp.zoom)
+        canvasView.setViewport(vp)
+    }
+
+    @objc func fitAll() {
+        let windows = terminalManager.windows
+        guard !windows.isEmpty else { return }
+
+        let union = windows.map(\.frame).reduce(windows[0].frame) { $0.union($1) }
+        let padding: CGFloat = 80
+        let paddedUnion = union.insetBy(dx: -padding, dy: -padding)
+
+        let scaleX = canvasView.bounds.width / paddedUnion.width
+        let scaleY = canvasView.bounds.height / paddedUnion.height
+        let zoom = min(scaleX, scaleY).clamped(to: Viewport.zoomMin...Viewport.zoomMax)
+
+        var vp = Viewport()
+        vp.zoom = zoom
+        vp.panX = -paddedUnion.minX * zoom + (canvasView.bounds.width - paddedUnion.width * zoom) / 2
+        vp.panY = -paddedUnion.minY * zoom + (canvasView.bounds.height - paddedUnion.height * zoom) / 2
+        canvasView.setViewport(vp)
+    }
+}
+
+// MARK: - Menu validation
+
+extension CanvasViewController: NSMenuItemValidation {
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == #selector(selectTheme(_:)) {
+            let themes = Theme.allThemes
+            guard menuItem.tag < themes.count else { return true }
+            menuItem.state = (themes[menuItem.tag].id == currentTheme.id) ? .on : .off
+        }
+        if menuItem.action == #selector(toggleBroadcast) {
+            menuItem.state = broadcastMode ? .on : .off
+        }
+        if menuItem.action == #selector(toggleSnapping) {
+            menuItem.state = snappingEnabled ? .on : .off
+        }
+        return true
+    }
+}

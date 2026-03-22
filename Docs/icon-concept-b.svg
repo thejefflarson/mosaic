@@ -1,0 +1,155 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <!-- "Grout" background -->
+    <linearGradient id="canvas-bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%"   stop-color="#0a0a18"/>
+      <stop offset="100%" stop-color="#06060e"/>
+    </linearGradient>
+
+    <!-- Per-tile title bar gradients -->
+    <linearGradient id="tb-teal" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#1a3030"/>
+      <stop offset="100%" stop-color="#122424"/>
+    </linearGradient>
+    <linearGradient id="tb-purple" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#2a1e40"/>
+      <stop offset="100%" stop-color="#1e1630"/>
+    </linearGradient>
+    <linearGradient id="tb-green" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#162414"/>
+      <stop offset="100%" stop-color="#0e180c"/>
+    </linearGradient>
+    <linearGradient id="tb-blue" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#161e38"/>
+      <stop offset="100%" stop-color="#0e1628"/>
+    </linearGradient>
+
+    <!-- Subtle inner shadow on each tile (makes tiles feel inset) -->
+    <filter id="inset" x="-5%" y="-5%" width="110%" height="110%" color-interpolation-filters="sRGB">
+      <feFlood flood-opacity="0" result="BackgroundImageFix"/>
+      <feBlend in="SourceGraphic" in2="BackgroundImageFix" mode="normal"/>
+    </filter>
+  </defs>
+
+  <!-- ── Icon background (the "grout") ── -->
+  <rect width="1024" height="1024" fill="url(#canvas-bg)"/>
+
+  <!-- ════════════════════════════════════
+       Layout: 2×2 asymmetric grid
+       Padding: 44px    Gap: 14px
+       Left col: 390px  Right col: 532px
+       Top row: 490px   Bottom row: 432px
+  ════════════════════════════════════ -->
+
+  <!-- ── Tile A: top-left — teal ── -->
+  <!-- x=44, y=44, w=390, h=490 -->
+  <rect x="44" y="44" width="390" height="490" rx="12" fill="#0e2424"/>
+  <!-- Title bar -->
+  <rect x="44" y="44" width="390" height="34" rx="12" fill="url(#tb-teal)"/>
+  <rect x="44" y="64" width="390" height="14" fill="url(#tb-teal)"/>
+  <!-- Traffic lights -->
+  <circle cx="68" cy="61" r="6.5" fill="#ff5f57"/>
+  <circle cx="88" cy="61" r="6.5" fill="#febc2e"/>
+  <circle cx="108" cy="61" r="6.5" fill="#28c840"/>
+  <!-- Title -->
+  <text x="239" y="61" font-family="system-ui,-apple-system,sans-serif"
+        font-size="11" fill="#60b0a0" text-anchor="middle" dominant-baseline="middle">~/api</text>
+  <!-- Terminal text -->
+  <text x="62" y="116" font-family="Menlo,Consolas,monospace" font-size="13" fill="#50fa7b">$ curl /health</text>
+  <text x="62" y="138" font-family="Menlo,Consolas,monospace" font-size="13" fill="#8be9fd">200 OK</text>
+  <text x="62" y="158" font-family="Menlo,Consolas,monospace" font-size="13" fill="#f8f8f2">{"status":"ok"}</text>
+  <text x="62" y="186" font-family="Menlo,Consolas,monospace" font-size="13" fill="#50fa7b">$ ping mosaic</text>
+  <text x="62" y="206" font-family="Menlo,Consolas,monospace" font-size="13" fill="#6272a4">PING mosaic</text>
+  <text x="62" y="226" font-family="Menlo,Consolas,monospace" font-size="13" fill="#50fa7b">64 bytes 0.42ms</text>
+  <text x="62" y="246" font-family="Menlo,Consolas,monospace" font-size="13" fill="#50fa7b">64 bytes 0.38ms</text>
+  <text x="62" y="266" font-family="Menlo,Consolas,monospace" font-size="13" fill="#50fa7b">64 bytes 0.41ms</text>
+  <text x="62" y="294" font-family="Menlo,Consolas,monospace" font-size="13" fill="#50fa7b">$</text>
+  <rect x="78" y="283" width="9" height="14" fill="#50fa7b"/>
+  <!-- Tile border -->
+  <rect x="44" y="44" width="390" height="490" rx="12" fill="none" stroke="#20c09040" stroke-width="1"/>
+
+  <!-- ── Tile B: top-right — purple ── -->
+  <!-- x=448, y=44, w=532, h=490 -->
+  <rect x="448" y="44" width="532" height="490" rx="12" fill="#130f1e"/>
+  <!-- Title bar -->
+  <rect x="448" y="44" width="532" height="34" rx="12" fill="url(#tb-purple)"/>
+  <rect x="448" y="64" width="532" height="14" fill="url(#tb-purple)"/>
+  <!-- Traffic lights -->
+  <circle cx="472" cy="61" r="6.5" fill="#ff5f57"/>
+  <circle cx="492" cy="61" r="6.5" fill="#febc2e"/>
+  <circle cx="512" cy="61" r="6.5" fill="#28c840"/>
+  <!-- Title -->
+  <text x="714" y="61" font-family="system-ui,-apple-system,sans-serif"
+        font-size="11" fill="#9080c8" text-anchor="middle" dominant-baseline="middle">node server.js</text>
+  <!-- Terminal text — colorful server logs -->
+  <text x="466" y="116" font-family="Menlo,Consolas,monospace" font-size="13" fill="#bd93f9">$ node server.js</text>
+  <text x="466" y="136" font-family="Menlo,Consolas,monospace" font-size="13" fill="#8be9fd">  ➜  :3000 ready</text>
+  <text x="466" y="156" font-family="Menlo,Consolas,monospace" font-size="13" fill="#50fa7b">  GET  /           200</text>
+  <text x="466" y="176" font-family="Menlo,Consolas,monospace" font-size="13" fill="#50fa7b">  GET  /api/health 200</text>
+  <text x="466" y="196" font-family="Menlo,Consolas,monospace" font-size="13" fill="#f1fa8c">  POST /api/data   201</text>
+  <text x="466" y="216" font-family="Menlo,Consolas,monospace" font-size="13" fill="#ff79c6">  GET  /api/users  200</text>
+  <text x="466" y="236" font-family="Menlo,Consolas,monospace" font-size="13" fill="#50fa7b">  GET  /api/me     200</text>
+  <text x="466" y="256" font-family="Menlo,Consolas,monospace" font-size="13" fill="#ff5555">  GET  /missing    404</text>
+  <text x="466" y="276" font-family="Menlo,Consolas,monospace" font-size="13" fill="#f1fa8c">  PUT  /api/prefs  200</text>
+  <text x="466" y="296" font-family="Menlo,Consolas,monospace" font-size="13" fill="#50fa7b">  GET  /api/data   200</text>
+  <!-- Tile border -->
+  <rect x="448" y="44" width="532" height="490" rx="12" fill="none" stroke="#8060c040" stroke-width="1"/>
+
+  <!-- ── Tile C: bottom-left — green ── -->
+  <!-- x=44, y=548, w=390, h=432 -->
+  <rect x="44" y="548" width="390" height="432" rx="12" fill="#0c1a0a"/>
+  <!-- Title bar -->
+  <rect x="44" y="548" width="390" height="34" rx="12" fill="url(#tb-green)"/>
+  <rect x="44" y="568" width="390" height="14" fill="url(#tb-green)"/>
+  <!-- Traffic lights -->
+  <circle cx="68" cy="565" r="6.5" fill="#ff5f57"/>
+  <circle cx="88" cy="565" r="6.5" fill="#febc2e"/>
+  <circle cx="108" cy="565" r="6.5" fill="#28c840"/>
+  <!-- Title -->
+  <text x="239" y="565" font-family="system-ui,-apple-system,sans-serif"
+        font-size="11" fill="#50a040" text-anchor="middle" dominant-baseline="middle">git</text>
+  <!-- Terminal text -->
+  <text x="62" y="620" font-family="Menlo,Consolas,monospace" font-size="13" fill="#50fa7b">$ git log --oneline</text>
+  <text x="62" y="640" font-family="Menlo,Consolas,monospace" font-size="13" fill="#f1fa8c">a3f2c1d</text>
+  <text x="62" y="640" font-family="Menlo,Consolas,monospace" font-size="13" fill="#f8f8f2">        add snap</text>
+  <text x="62" y="660" font-family="Menlo,Consolas,monospace" font-size="13" fill="#f1fa8c">b7e9a2f</text>
+  <text x="62" y="660" font-family="Menlo,Consolas,monospace" font-size="13" fill="#f8f8f2">        fix theme</text>
+  <text x="62" y="680" font-family="Menlo,Consolas,monospace" font-size="13" fill="#f1fa8c">c1d4e5b</text>
+  <text x="62" y="680" font-family="Menlo,Consolas,monospace" font-size="13" fill="#f8f8f2">        add minimap</text>
+  <text x="62" y="706" font-family="Menlo,Consolas,monospace" font-size="13" fill="#50fa7b">$</text>
+  <rect x="78" y="695" width="9" height="14" fill="#50fa7b"/>
+  <!-- Tile border -->
+  <rect x="44" y="548" width="390" height="432" rx="12" fill="none" stroke="#40a03040" stroke-width="1"/>
+
+  <!-- ── Tile D: bottom-right — blue ── -->
+  <!-- x=448, y=548, w=532, h=432 -->
+  <rect x="448" y="548" width="532" height="432" rx="12" fill="#0c1020"/>
+  <!-- Title bar -->
+  <rect x="448" y="548" width="532" height="34" rx="12" fill="url(#tb-blue)"/>
+  <rect x="448" y="568" width="532" height="14" fill="url(#tb-blue)"/>
+  <!-- Traffic lights -->
+  <circle cx="472" cy="565" r="6.5" fill="#ff5f57"/>
+  <circle cx="492" cy="565" r="6.5" fill="#febc2e"/>
+  <circle cx="512" cy="565" r="6.5" fill="#28c840"/>
+  <!-- Title -->
+  <text x="714" y="565" font-family="system-ui,-apple-system,sans-serif"
+        font-size="11" fill="#6080c0" text-anchor="middle" dominant-baseline="middle">vim main.swift</text>
+  <!-- Terminal text — vim-like editor -->
+  <text x="466" y="620" font-family="Menlo,Consolas,monospace" font-size="13" fill="#6272a4">  1</text>
+  <text x="466" y="620" font-family="Menlo,Consolas,monospace" font-size="13" fill="#ff79c6">   import </text>
+  <text x="466" y="620" font-family="Menlo,Consolas,monospace" font-size="13" fill="#f8f8f2">            AppKit</text>
+  <text x="466" y="640" font-family="Menlo,Consolas,monospace" font-size="13" fill="#6272a4">  2</text>
+  <text x="466" y="660" font-family="Menlo,Consolas,monospace" font-size="13" fill="#6272a4">  3</text>
+  <text x="466" y="660" font-family="Menlo,Consolas,monospace" font-size="13" fill="#8be9fd">   final class </text>
+  <text x="466" y="680" font-family="Menlo,Consolas,monospace" font-size="13" fill="#6272a4">  4</text>
+  <text x="466" y="680" font-family="Menlo,Consolas,monospace" font-size="13" fill="#f8f8f2">     var zoom: CGFloat</text>
+  <text x="466" y="700" font-family="Menlo,Consolas,monospace" font-size="13" fill="#6272a4">  5</text>
+  <text x="466" y="700" font-family="Menlo,Consolas,monospace" font-size="13" fill="#f8f8f2">     var panX: CGFloat</text>
+  <!-- Vim status bar -->
+  <rect x="448" y="944" width="532" height="22" rx="0" fill="#5060c0" opacity="0.85"/>
+  <text x="456" y="955" font-family="Menlo,Consolas,monospace" font-size="11"
+        fill="#ffffff" dominant-baseline="middle">-- NORMAL --  main.swift  5,1</text>
+  <rect x="44" y="548" width="390" height="432" rx="12" fill="none"/>
+  <!-- Tile border -->
+  <rect x="448" y="548" width="532" height="432" rx="12" fill="none" stroke="#4060a040" stroke-width="1"/>
+</svg>

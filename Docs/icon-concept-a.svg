@@ -1,0 +1,164 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="canvas" x1="20%" y1="0%" x2="80%" y2="100%">
+      <stop offset="0%"   stop-color="#F6EDD8"/>
+      <stop offset="100%" stop-color="#E2CFA8"/>
+    </linearGradient>
+    <pattern id="grid" width="48" height="48" patternUnits="userSpaceOnUse">
+      <path d="M48 0 L0 0 0 48" fill="none" stroke="#C8B88A" stroke-width="0.5" opacity="0.35"/>
+    </pattern>
+    <radialGradient id="toplight" cx="50%" cy="5%" r="60%">
+      <stop offset="0%"   stop-color="#ffffff" stop-opacity="0.28"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="win-shine" x1="0%" y1="0%" x2="0%" y2="18%">
+      <stop offset="0%"   stop-color="#ffffff" stop-opacity="0.10"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="tb-back" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#252540"/>
+      <stop offset="100%" stop-color="#1a1a32"/>
+    </linearGradient>
+    <linearGradient id="tb-front" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#2a2050"/>
+      <stop offset="100%" stop-color="#1e1840"/>
+    </linearGradient>
+    <linearGradient id="win-back" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#16162e"/>
+      <stop offset="100%" stop-color="#0e0e22"/>
+    </linearGradient>
+    <linearGradient id="win-front" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#1a183a"/>
+      <stop offset="100%" stop-color="#10102c"/>
+    </linearGradient>
+    <filter id="sh-back" x="-50%" y="-40%" width="200%" height="230%">
+      <feDropShadow dx="0" dy="22" stdDeviation="32" flood-color="#5a3a00" flood-opacity="0.45"/>
+    </filter>
+    <filter id="sh-front" x="-55%" y="-45%" width="210%" height="250%">
+      <feDropShadow dx="0" dy="44" stdDeviation="56" flood-color="#3a2000" flood-opacity="0.65"/>
+    </filter>
+    <!-- Inner vignette to reduce visual weight at the edges -->
+    <radialGradient id="vignette" cx="50%" cy="50%" r="70%">
+      <stop offset="0%"   stop-color="#000000" stop-opacity="0"/>
+      <stop offset="100%" stop-color="#000000" stop-opacity="0.18"/>
+    </radialGradient>
+    <!-- Squircle is 820×820 centered in 1024×1024, leaving 102px transparent
+         padding on each side for the OS drop shadow.
+         Measured from Pixelmator Pro: squircle = 80.1% of canvas. -->
+    <clipPath id="squircle">
+      <rect x="102" y="102" width="820" height="820" rx="183" ry="183"/>
+    </clipPath>
+  </defs>
+
+  <g clip-path="url(#squircle)">
+  <!-- Scale content from 1024×1024 design space into the 820×820 squircle -->
+  <g transform="translate(102 102) scale(0.8008)">
+
+  <!-- Canvas background -->
+  <rect width="1024" height="1024" fill="url(#canvas)"/>
+  <rect width="1024" height="1024" fill="url(#grid)"/>
+  <rect width="1024" height="1024" fill="url(#toplight)"/>
+  <rect width="1024" height="1024" fill="url(#vignette)"/>
+
+  <!-- ════════════════════════════════════════════
+       Back window left — −7°
+  ════════════════════════════════════════════ -->
+  <g transform="translate(72, 260) rotate(-7, 245, 165)" filter="url(#sh-back)">
+    <rect width="490" height="330" rx="13" fill="url(#win-back)"/>
+    <rect width="490" height="330" rx="13" fill="url(#win-shine)"/>
+    <rect width="490" height="38" rx="13" fill="url(#tb-back)"/>
+    <rect x="0" y="24" width="490" height="14" fill="url(#tb-back)"/>
+    <!-- Close button only -->
+    <circle cx="28" cy="19" r="7" fill="#ff5f57"/>
+    <!-- Content lines: prompt, git log output, another prompt + cursor -->
+    <!-- prompt -->
+    <rect x="22" y="56" width="220" height="11" rx="3" fill="#50fa7b" opacity="0.9"/>
+    <!-- log lines -->
+    <rect x="22" y="77" width="42" height="10" rx="2" fill="#f1fa8c" opacity="0.85"/>
+    <rect x="72" y="77" width="160" height="10" rx="2" fill="#8b9fc4" opacity="0.7"/>
+    <rect x="22" y="97" width="42" height="10" rx="2" fill="#f1fa8c" opacity="0.85"/>
+    <rect x="72" y="97" width="140" height="10" rx="2" fill="#8b9fc4" opacity="0.7"/>
+    <rect x="22" y="117" width="42" height="10" rx="2" fill="#f1fa8c" opacity="0.85"/>
+    <rect x="72" y="117" width="175" height="10" rx="2" fill="#8b9fc4" opacity="0.7"/>
+    <rect x="22" y="137" width="42" height="10" rx="2" fill="#f1fa8c" opacity="0.85"/>
+    <rect x="72" y="137" width="120" height="10" rx="2" fill="#8b9fc4" opacity="0.7"/>
+    <!-- prompt + cursor -->
+    <rect x="22" y="163" width="75" height="11" rx="3" fill="#50fa7b" opacity="0.9"/>
+    <rect x="104" y="163" width="9" height="11" rx="1" fill="#50fa7b" opacity="0.85"/>
+    <rect width="490" height="1.5" rx="1" fill="#ffffff" opacity="0.14"/>
+  </g>
+
+  <!-- ════════════════════════════════════════════
+       Back window right — +8°
+  ════════════════════════════════════════════ -->
+  <g transform="translate(524, 238) rotate(8, 215, 145)" filter="url(#sh-back)">
+    <rect width="430" height="290" rx="13" fill="url(#win-back)"/>
+    <rect width="430" height="290" rx="13" fill="url(#win-shine)"/>
+    <rect width="430" height="38" rx="13" fill="url(#tb-back)"/>
+    <rect x="0" y="24" width="430" height="14" fill="url(#tb-back)"/>
+    <!-- Close button only -->
+    <circle cx="28" cy="19" r="7" fill="#ff5f57"/>
+    <!-- prompt -->
+    <rect x="22" y="56" width="110" height="11" rx="3" fill="#50fa7b" opacity="0.9"/>
+    <!-- ls output — directory names in purple -->
+    <rect x="22" y="77" width="80" height="10" rx="2" fill="#8b9fc4" opacity="0.65"/>
+    <rect x="110" y="77" width="70" height="10" rx="2" fill="#bd93f9" opacity="0.85"/>
+    <rect x="22" y="97" width="80" height="10" rx="2" fill="#8b9fc4" opacity="0.65"/>
+    <rect x="110" y="97" width="85" height="10" rx="2" fill="#bd93f9" opacity="0.85"/>
+    <rect x="22" y="117" width="80" height="10" rx="2" fill="#8b9fc4" opacity="0.65"/>
+    <rect x="110" y="117" width="95" height="10" rx="2" fill="#bd93f9" opacity="0.85"/>
+    <!-- prompt + cursor -->
+    <rect x="22" y="153" width="26" height="11" rx="3" fill="#50fa7b" opacity="0.9"/>
+    <rect x="55" y="153" width="9" height="11" rx="1" fill="#50fa7b" opacity="0.85"/>
+    <rect width="430" height="1.5" rx="1" fill="#ffffff" opacity="0.12"/>
+  </g>
+
+  <!-- ════════════════════════════════════════════
+       Front window hero — +3°
+  ════════════════════════════════════════════ -->
+  <g transform="translate(222, 410) rotate(3, 278, 196)" filter="url(#sh-front)">
+    <rect width="556" height="392" rx="14" fill="url(#win-front)"/>
+    <rect width="556" height="392" rx="14" fill="url(#win-shine)"/>
+    <rect width="556" height="40" rx="14" fill="url(#tb-front)"/>
+    <rect x="0" y="26" width="556" height="14" fill="url(#tb-front)"/>
+    <!-- Close button only -->
+    <circle cx="28" cy="20" r="7.5" fill="#ff5f57"/>
+    <!-- Server log lines: prompt, then colored status lines -->
+    <!-- prompt line -->
+    <rect x="22" y="60" width="190" height="12" rx="3" fill="#bd93f9" opacity="0.9"/>
+    <!-- listening -->
+    <rect x="22" y="82" width="230" height="11" rx="3" fill="#8be9fd" opacity="0.85"/>
+    <!-- GET 200 green -->
+    <rect x="22" y="103" width="56" height="11" rx="3" fill="#50fa7b" opacity="0.85"/>
+    <rect x="86" y="103" width="160" height="11" rx="3" fill="#8b9fc4" opacity="0.65"/>
+    <rect x="254" y="103" width="44" height="11" rx="3" fill="#50fa7b" opacity="0.85"/>
+    <!-- GET 200 green -->
+    <rect x="22" y="124" width="56" height="11" rx="3" fill="#50fa7b" opacity="0.85"/>
+    <rect x="86" y="124" width="148" height="11" rx="3" fill="#8b9fc4" opacity="0.65"/>
+    <rect x="242" y="124" width="44" height="11" rx="3" fill="#50fa7b" opacity="0.85"/>
+    <!-- POST 201 yellow -->
+    <rect x="22" y="145" width="60" height="11" rx="3" fill="#f1fa8c" opacity="0.85"/>
+    <rect x="90" y="145" width="140" height="11" rx="3" fill="#8b9fc4" opacity="0.65"/>
+    <rect x="238" y="145" width="44" height="11" rx="3" fill="#f1fa8c" opacity="0.85"/>
+    <!-- GET 200 pink -->
+    <rect x="22" y="166" width="56" height="11" rx="3" fill="#ff79c6" opacity="0.85"/>
+    <rect x="86" y="166" width="152" height="11" rx="3" fill="#8b9fc4" opacity="0.65"/>
+    <rect x="246" y="166" width="44" height="11" rx="3" fill="#ff79c6" opacity="0.85"/>
+    <!-- GET 404 red -->
+    <rect x="22" y="187" width="56" height="11" rx="3" fill="#ff5555" opacity="0.85"/>
+    <rect x="86" y="187" width="130" height="11" rx="3" fill="#8b9fc4" opacity="0.65"/>
+    <rect x="224" y="187" width="44" height="11" rx="3" fill="#ff5555" opacity="0.85"/>
+    <!-- GET 200 green -->
+    <rect x="22" y="208" width="56" height="11" rx="3" fill="#50fa7b" opacity="0.85"/>
+    <rect x="86" y="208" width="148" height="11" rx="3" fill="#8b9fc4" opacity="0.65"/>
+    <rect x="242" y="208" width="44" height="11" rx="3" fill="#50fa7b" opacity="0.85"/>
+    <!-- prompt + cursor -->
+    <rect x="22" y="238" width="30" height="12" rx="3" fill="#bd93f9" opacity="0.9"/>
+    <rect x="59" y="238" width="10" height="12" rx="1" fill="#bd93f9" opacity="0.85"/>
+    <rect width="556" height="1.5" rx="1" fill="#ffffff" opacity="0.18"/>
+    <rect width="556" height="392" rx="14" fill="none" stroke="#8866ee" stroke-width="2" opacity="0.6"/>
+  </g>
+
+  </g>
+  </g>
+</svg>
