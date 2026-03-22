@@ -833,8 +833,12 @@ final class CanvasViewController: NSViewController {
             addAnnotation(av)
 
         case .image:
-            guard let path = s.imagePath,
-                  let image = NSImage(contentsOfFile: path) else { return }
+            guard let path = s.imagePath else { return }
+            // Restrict image loads to the app's own Images directory to prevent
+            // a tampered workspace.json from reading arbitrary files via path traversal.
+            let allowedPrefix = WorkspaceStore.shared.imagesDirectory.path
+            guard path.hasPrefix(allowedPrefix + "/") || path == allowedPrefix else { return }
+            guard let image = NSImage(contentsOfFile: path) else { return }
             let av = ImageAnnotationView(at: frame.origin, image: image)
             av.frame = frame
             addAnnotation(av)

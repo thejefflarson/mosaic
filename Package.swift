@@ -5,7 +5,7 @@ let package = Package(
     name: "CanvasTerm",
     platforms: [.macOS(.v14)],
     dependencies: [
-        .package(url: "https://github.com/migueldeicaza/SwiftTerm.git", branch: "main"),
+        .package(url: "https://github.com/migueldeicaza/SwiftTerm.git", revision: "3c45fdcfcf4395c72d2a4ee23c0bce79017b5391"),
     ],
     targets: [
         .executableTarget(

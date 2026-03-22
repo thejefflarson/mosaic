@@ -233,11 +233,49 @@ final class TerminalWindowView: NSView {
             self.applyTheme(self.theme)
             if let text = self.restoredScrollback, !text.isEmpty {
                 self.restoredScrollback = nil
+                // Strip all ANSI/OSC escape sequences from the persisted scrollback
+                // before re-feeding it. Without this, a tampered workspace.json could
+                // inject OSC sequences (e.g. OSC 8 hyperlinks, OSC 1337 file transfers,
+                // title-setting sequences) into the running terminal.
+                let safe = TerminalWindowView.stripEscapeSequences(text)
                 // Dim color + italic, then show saved content, then reset
-                let dimmed = "\u{1B}[2;3m" + text + "\u{1B}[0m\r\n"
+                let dimmed = "\u{1B}[2;3m" + safe + "\u{1B}[0m\r\n"
                 self.termView.feed(text: dimmed)
             }
         }
+    }
+
+    /// Remove ANSI CSI sequences (`ESC [ … m/A/B/…`), OSC sequences
+    /// (`ESC ] … BEL/ST`), and bare `ESC X` two-character sequences from `text`.
+    /// Used to sanitise persisted scrollback before re-feeding it to the terminal.
+    static func stripEscapeSequences(_ text: String) -> String {
+        var result = ""
+        result.reserveCapacity(text.count)
+        var iter = text.unicodeScalars.makeIterator()
+        while let ch = iter.next() {
+            guard ch == "\u{1B}" else { result.unicodeScalars.append(ch); continue }
+            // Peek at the next character to classify the sequence type.
+            guard let next = iter.next() else { break }
+            switch next {
+            case "[":
+                // CSI: consume until a byte in 0x40–0x7E (the final byte)
+                while let c = iter.next() {
+                    if c.value >= 0x40 && c.value <= 0x7E { break }
+                }
+            case "]":
+                // OSC: consume until BEL (0x07) or ST (ESC \)
+                var prev: Unicode.Scalar = "\u{00}"
+                while let c = iter.next() {
+                    if c == "\u{07}" { break }
+                    if prev == "\u{1B}" && c == "\\" { break }
+                    prev = c
+                }
+            default:
+                // Two-character escape sequence — already consumed `next`; discard it.
+                break
+            }
+        }
+        return result
     }
 
     func applyTerminalSettings(_ settings: TerminalSettings) {
