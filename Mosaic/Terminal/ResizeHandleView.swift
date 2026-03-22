@@ -79,6 +79,7 @@ final class ResizeHandleView: NSView {
     override func mouseDown(with event: NSEvent) {
         lastDragLocation = event.locationInWindow
         wasDragging = false
+        CanvasCursorManager.beginDrag(cursorForEdge(edge), in: window)
         onResizeBegan?()
     }
 
@@ -93,6 +94,7 @@ final class ResizeHandleView: NSView {
     }
 
     override func mouseUp(with event: NSEvent) {
+        CanvasCursorManager.endDrag(in: window)
         lastDragLocation = nil
         if wasDragging { onResizeEnded?() }
         wasDragging = false

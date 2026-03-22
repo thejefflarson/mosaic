@@ -111,6 +111,13 @@ final class TitleBarView: NSView {
         return nil
     }
 
+    // MARK: - Cursor
+
+    override func resetCursorRects() {
+        addCursorRect(bounds, cursor: .openHand)
+        addCursorRect(closeButton.frame, cursor: .arrow)
+    }
+
     // MARK: - Drag to move window
 
     override func mouseDown(with event: NSEvent) {
@@ -123,6 +130,7 @@ final class TitleBarView: NSView {
         }
         lastDragLocation = event.locationInWindow
         wasDragging = false
+        CanvasCursorManager.beginDrag(.closedHand, in: window)
         onDragBegan?()
     }
 
@@ -135,6 +143,7 @@ final class TitleBarView: NSView {
     }
 
     override func mouseUp(with event: NSEvent) {
+        CanvasCursorManager.endDrag(in: window)
         lastDragLocation = nil
         if wasDragging { onDragEnded?() }
         wasDragging = false

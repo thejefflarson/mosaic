@@ -47,7 +47,7 @@ class AnnotationView: NSView {
 
     override func resetCursorRects() {
         guard canvasView?.activeTool == .pointer else { return }
-        addCursorRect(bounds, cursor: didDrag ? .closedHand : .openHand)
+        addCursorRect(bounds, cursor: .openHand)
     }
 
     // MARK: - Drag to move (pointer tool)
@@ -60,6 +60,7 @@ class AnnotationView: NSView {
         frameAtDragStart = frame
         lastDraggedOrigin = frame.origin
         didDrag = false
+        CanvasCursorManager.beginDrag(.closedHand, in: window)
     }
 
     override func mouseDragged(with event: NSEvent) {
@@ -71,7 +72,6 @@ class AnnotationView: NSView {
         guard didDrag || screenDist >= AnnotationView.dragThreshold else { return }
         if !didDrag {
             didDrag = true
-            NSCursor.closedHand.push()
         }
         let zoom = canvasView?.currentZoom ?? 1
         let totalDX =  (loc.x - start.x) / zoom
@@ -91,11 +91,9 @@ class AnnotationView: NSView {
 
     override func mouseUp(with event: NSEvent) {
         clearSnapGuides?()
-        if didDrag {
-            NSCursor.pop()
-            if let from = frameAtDragStart, frame != from {
-                onDragEnded?(from, frame)
-            }
+        CanvasCursorManager.endDrag(in: window)
+        if didDrag, let from = frameAtDragStart, frame != from {
+            onDragEnded?(from, frame)
         }
         dragStart = nil
         frameAtDragStart = nil
