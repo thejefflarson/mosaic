@@ -11,8 +11,8 @@ final class UndoTests: XCTestCase {
     var vc: CanvasViewController!
     var window: NSWindow!
 
-    override func setUp() {
-        super.setUp()
+    override func setUp() async throws {
+        try await super.setUp()
         vc = CanvasViewController()
         // Creating the window (without showing it) puts the view in the responder chain
         // so undoManager is non-nil, but does NOT trigger viewDidAppear / restoreWorkspace.
@@ -31,12 +31,12 @@ final class UndoTests: XCTestCase {
         vc.undoManager?.groupsByEvent = false
     }
 
-    override func tearDown() {
+    override func tearDown() async throws {
         vc.undoManager?.removeAllActions()
         window.contentViewController = nil
         window = nil
         vc = nil
-        super.tearDown()
+        try await super.tearDown()
     }
 
     // MARK: - Helpers

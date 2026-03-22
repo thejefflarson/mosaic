@@ -8,12 +8,14 @@ import AppKit
 enum CanvasCursorManager {
 
     /// Lock the cursor to `cursor` for the duration of a drag.
+    @MainActor
     static func beginDrag(_ cursor: NSCursor, in window: NSWindow?) {
         window?.disableCursorRects()
         cursor.set()
     }
 
     /// Restore normal cursor-rect processing after a drag ends.
+    @MainActor
     static func endDrag(in window: NSWindow?) {
         window?.enableCursorRects()
         window?.resetCursorRects()

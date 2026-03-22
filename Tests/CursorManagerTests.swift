@@ -9,7 +9,7 @@ final class CursorManagerTests: XCTestCase {
 
     override func setUp() async throws {
         try await super.setUp()
-        window = await NSWindow(
+        window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 200, height: 200),
             styleMask: [.borderless],
             backing: .buffered,
