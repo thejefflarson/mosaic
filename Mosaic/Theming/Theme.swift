@@ -246,13 +246,16 @@ extension Theme {
 }
 
 extension NSColor {
-    var hexString: String {
+    /// Packed 24-bit RGB integer (0xRRGGBB) in sRGB space.
+    var hex: Int {
         let cc = usingColorSpace(.sRGB) ?? self
         let r = Int(max(0, min(1, cc.redComponent))   * 255)
         let g = Int(max(0, min(1, cc.greenComponent)) * 255)
         let b = Int(max(0, min(1, cc.blueComponent))  * 255)
-        return String(format: "#%02x%02x%02x", r, g, b)
+        return (r << 16) | (g << 8) | b
     }
+
+    var hexString: String { String(format: "#%06x", hex) }
 
     static func fromHex(_ hex: String) -> NSColor {
         var s = hex.hasPrefix("#") ? String(hex.dropFirst()) : hex

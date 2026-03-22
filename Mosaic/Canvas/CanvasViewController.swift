@@ -85,7 +85,7 @@ final class CanvasViewController: NSViewController {
     private var deleteSelectionStart: CGPoint?
 
     /// All live annotation views (in world space).
-    private var annotations: [AnnotationView] = []
+    var annotations: [AnnotationView] = []
     /// In-progress annotation during freehand/arrow draw.
     private var activeAnnotation: AnnotationView?
 
@@ -439,7 +439,7 @@ final class CanvasViewController: NSViewController {
                width: abs(b.x - a.x), height: abs(b.y - a.y))
     }
 
-    private func addAnnotation(_ av: AnnotationView) {
+    func addAnnotation(_ av: AnnotationView) {
         av.onDelete = { [weak self, weak av] in
             guard let av else { return }
             self?.removeAnnotation(av)
@@ -473,7 +473,7 @@ final class CanvasViewController: NSViewController {
         minimapView.update(viewport: canvasView.viewport, windows: terminalManager.windows, annotations: annotations)
     }
 
-    private func removeAnnotation(_ av: AnnotationView) {
+    func removeAnnotation(_ av: AnnotationView) {
         undoManager?.setActionName("Delete Annotation")
         undoManager?.registerUndo(withTarget: self) { @MainActor [weak av] vc in
             guard let av else { return }
@@ -485,7 +485,7 @@ final class CanvasViewController: NSViewController {
         scheduleSave()
     }
 
-    private func moveAnnotation(_ av: AnnotationView, to newFrame: CGRect) {
+    func moveAnnotation(_ av: AnnotationView, to newFrame: CGRect) {
         let oldFrame = av.frame
         undoManager?.setActionName("Move")
         undoManager?.registerUndo(withTarget: self) { @MainActor [weak av] vc in
@@ -546,49 +546,17 @@ final class CanvasViewController: NSViewController {
         let threshold = 4.0 / canvasView.viewport.zoom
         let others = allElementFrames(excludingAnnotation: excludingAnnotation,
                                       excludingTerminal: excludingTerminal)
+        let snap = snapRect(proposed, to: others, threshold: threshold)
 
-        // All three lines of the moving element can snap to all three lines of any
-        // reference element: outer edges (min/max) and centre line (mid).
-        let movingX: [CGFloat] = [proposed.minX, proposed.midX, proposed.maxX]
-        let movingY: [CGFloat] = [proposed.minY, proposed.midY, proposed.maxY]
-
-        var bestDX: (delta: CGFloat, worldX: CGFloat)?
-        var bestDY: (delta: CGFloat, worldY: CGFloat)?
-
-        for other in others {
-            let refX: [CGFloat] = [other.minX, other.midX, other.maxX]
-            let refY: [CGFloat] = [other.minY, other.midY, other.maxY]
-
-            for px in movingX {
-                for ox in refX {
-                    let d = ox - px
-                    if abs(d) < threshold, bestDX == nil || abs(d) < abs(bestDX!.delta) {
-                        bestDX = (d, ox)
-                    }
-                }
-            }
-            for py in movingY {
-                for oy in refY {
-                    let d = oy - py
-                    if abs(d) < threshold, bestDY == nil || abs(d) < abs(bestDY!.delta) {
-                        bestDY = (d, oy)
-                    }
-                }
-            }
-        }
-
-        var result = proposed
         var guides: [(isVertical: Bool, pos: CGFloat)] = []
-        if let b = bestDX {
-            result.origin.x += b.delta
-            guides.append((true, canvasView.viewport.worldToScreen(CGPoint(x: b.worldX, y: 0)).x))
+        if let wx = snap.worldX {
+            guides.append((true, canvasView.viewport.worldToScreen(CGPoint(x: wx, y: 0)).x))
         }
-        if let b = bestDY {
-            result.origin.y += b.delta
-            guides.append((false, canvasView.viewport.worldToScreen(CGPoint(x: 0, y: b.worldY)).y))
+        if let wy = snap.worldY {
+            guides.append((false, canvasView.viewport.worldToScreen(CGPoint(x: 0, y: wy)).y))
         }
         snapOverlay.guides = guides
-        return result
+        return snap.rect
     }
 
     @objc func toggleSnapping() {
@@ -908,8 +876,8 @@ final class CanvasViewController: NSViewController {
 extension CanvasViewController {
     // Explicit overrides ensure the canvas undo manager is a guaranteed stop in the
     // responder chain — without these, Cmd+Z can get lost if a terminal is focused.
-    override func undo(_ sender: Any?) { undoManager?.undo() }
-    override func redo(_ sender: Any?) { undoManager?.redo() }
+    @objc func undo(_ sender: Any?) { undoManager?.undo() }
+    @objc func redo(_ sender: Any?) { undoManager?.redo() }
 }
 
 // MARK: - Menu validation
