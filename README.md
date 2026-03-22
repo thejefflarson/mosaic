@@ -1,14 +1,14 @@
 <div align="center">
-<img src="Docs/icon-concept-a.svg" width="128" alt="Mosaic icon" />
+<img src="Docs/icon-concept-a.svg" width="256" alt="Mosaic icon" />
 
 # Mosaic
+
 </div>
 
 An infinite 2D spatial canvas for macOS where real PTY-backed terminal windows can be freely panned, zoomed, dragged, and resized. Think of it as a whiteboard where every sticky note is a live shell.
 
-![macOS 14+](https://img.shields.io/badge/macOS-14%2B-blue) ![Swift 6](https://img.shields.io/badge/Swift-6.0-orange)
+https://github.com/user-attachments/assets/6f503b39-5477-4ede-a528-04e4f09dc268
 
-<video src="https://github.com/thejefflarson/mosaic/releases/download/v0.1.0/smaller.mov" controls width="100%"></video>
 
 ## What it does
 
