@@ -6,10 +6,8 @@ import SwiftUI
 private final class ToolPaletteModel: ObservableObject {
     @Published var activeTool: CanvasTool = .pointer
     @Published var snappingEnabled: Bool = true
-    @Published var focusFollowsCenter: Bool = false
+    @Published var focusFollowsCenter: Bool = true
     var onToolSelected: ((CanvasTool) -> Void)?
-    var onSnappingToggled: ((Bool) -> Void)?
-    var onFocusFollowsCenterToggled: ((Bool) -> Void)?
 }
 
 // MARK: - SwiftUI palette
@@ -42,7 +40,6 @@ private struct ToolPaletteSwiftUIView: View {
                 active: model.snappingEnabled
             ) {
                 model.snappingEnabled.toggle()
-                model.onSnappingToggled?(model.snappingEnabled)
             }
             toggleButton(
                 symbol: "scope",
@@ -50,7 +47,6 @@ private struct ToolPaletteSwiftUIView: View {
                 active: model.focusFollowsCenter
             ) {
                 model.focusFollowsCenter.toggle()
-                model.onFocusFollowsCenterToggled?(model.focusFollowsCenter)
             }
         }
         .padding(.horizontal, 8)
@@ -103,16 +99,6 @@ final class ToolPaletteView: NSView {
     var onToolSelected: ((CanvasTool) -> Void)? {
         get { model.onToolSelected }
         set { model.onToolSelected = newValue }
-    }
-
-    var onSnappingToggled: ((Bool) -> Void)? {
-        get { model.onSnappingToggled }
-        set { model.onSnappingToggled = newValue }
-    }
-
-    var onFocusFollowsCenterToggled: ((Bool) -> Void)? {
-        get { model.onFocusFollowsCenterToggled }
-        set { model.onFocusFollowsCenterToggled = newValue }
     }
 
     var snappingEnabled: Bool {

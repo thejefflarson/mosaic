@@ -21,9 +21,13 @@ struct SnapResult {
 /// The closest pairing within `threshold` wins; ties go to the smallest delta.
 ///
 /// Returns the adjusted rect and the world-space positions of any triggered guides.
-func snapRect(_ proposed: CGRect, to others: [CGRect], threshold: CGFloat) -> SnapResult {
-    let movingX: [CGFloat] = [proposed.minX, proposed.midX, proposed.maxX]
-    let movingY: [CGFloat] = [proposed.minY, proposed.midY, proposed.maxY]
+/// `movingX`/`movingY`: restrict which lines of the proposed rect participate in snapping.
+/// Pass nil to test all three (min/mid/max). Pass a subset for resize operations where
+/// only the dragged edge should snap (e.g. right-edge drag → `movingX: [proposed.maxX]`).
+func snapRect(_ proposed: CGRect, to others: [CGRect], threshold: CGFloat,
+              movingX: [CGFloat]? = nil, movingY: [CGFloat]? = nil) -> SnapResult {
+    let testX = movingX ?? [proposed.minX, proposed.midX, proposed.maxX]
+    let testY = movingY ?? [proposed.minY, proposed.midY, proposed.maxY]
 
     var bestDX: CGFloat?
     var bestWorldX: CGFloat?
@@ -36,7 +40,7 @@ func snapRect(_ proposed: CGRect, to others: [CGRect], threshold: CGFloat) -> Sn
         let refX: [CGFloat] = [other.minX, other.midX, other.maxX]
         let refY: [CGFloat] = [other.minY, other.midY, other.maxY]
 
-        for px in movingX {
+        for px in testX {
             for (xi, ox) in refX.enumerated() {
                 let d = ox - px
                 let isMid = xi == 1
@@ -47,7 +51,7 @@ func snapRect(_ proposed: CGRect, to others: [CGRect], threshold: CGFloat) -> Sn
                 }
             }
         }
-        for py in movingY {
+        for py in testY {
             for (yi, oy) in refY.enumerated() {
                 let d = oy - py
                 let isMid = yi == 1

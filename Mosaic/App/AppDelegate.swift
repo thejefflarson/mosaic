@@ -8,10 +8,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupMenuBar()
         openMainWindow()
-        NotificationCenter.default.addObserver(
-            forName: .themesDidChange, object: nil, queue: .main) { [weak self] _ in
-            Task { @MainActor [weak self] in self?.rebuildThemeMenuItems() }
-        }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -169,17 +165,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                            keyEquivalent: "")
         windowMenu.addItem(NSMenuItem.separator())
 
-        let prevItem = NSMenuItem(title: "Previous Terminal",
-                                  action: #selector(CanvasViewController.focusPreviousTerminal),
-                                  keyEquivalent: "\u{F702}")   // NSLeftArrowFunctionKey
-        prevItem.keyEquivalentModifierMask = [.command]
-        windowMenu.addItem(prevItem)
-
-        let nextItem = NSMenuItem(title: "Next Terminal",
-                                  action: #selector(CanvasViewController.focusNextTerminal),
-                                  keyEquivalent: "\u{F703}")   // NSRightArrowFunctionKey
-        nextItem.keyEquivalentModifierMask = [.command]
-        windowMenu.addItem(nextItem)
+        for (title, sel, key) in [
+            ("Focus Terminal Left",  #selector(CanvasViewController.focusTerminalLeft),  "\u{F702}"),
+            ("Focus Terminal Right", #selector(CanvasViewController.focusTerminalRight), "\u{F703}"),
+            ("Focus Terminal Above", #selector(CanvasViewController.focusTerminalUp),    "\u{F700}"),
+            ("Focus Terminal Below", #selector(CanvasViewController.focusTerminalDown),  "\u{F701}"),
+        ] {
+            let item = NSMenuItem(title: title, action: sel, keyEquivalent: key)
+            item.keyEquivalentModifierMask = [.command]
+            windowMenu.addItem(item)
+        }
 
         windowMenu.addItem(NSMenuItem.separator())
         windowMenu.addItem(withTitle: "Bring All to Front",

@@ -176,11 +176,11 @@ final class MinimapView: NSView {
                 wf.bgColor.setFill()
                 let bodyPath = NSBezierPath(roundedRect: dest, xRadius: 2, yRadius: 2)
                 bodyPath.fill()
-                // Close dot — small circle top-left, colored from the foreground at low opacity
-                let dotD = max(min(dest.width * 0.08, dest.height * 0.12, 5), 2)
+                // Close dot — small red circle top-left, like macOS traffic lights
+                let dotD = min(dest.width * 0.06, dest.height * 0.09).clamped(to: 1.5...3.5)
                 let dotX = dest.minX + dotD * 0.8
                 let dotY = dest.minY + dotD * 0.8
-                wf.fgColor.withAlphaComponent(0.35).setFill()
+                NSColor(red: 0.9, green: 0.3, blue: 0.3, alpha: 0.9).setFill()
                 NSBezierPath(ovalIn: NSRect(x: dotX, y: dotY, width: dotD, height: dotD)).fill()
                 // Border — bright blue for the focused terminal, subtle otherwise
                 if wf.isActive {

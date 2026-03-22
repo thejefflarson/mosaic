@@ -30,3 +30,7 @@ build/
 # CocoaPods (not used, but just in case)
 Pods/
 .claude/
+
+# Local video assets (hosted as release assets, not in git)
+*.mov
+*.mp4

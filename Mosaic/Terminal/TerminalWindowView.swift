@@ -9,6 +9,14 @@ final class InterceptingTerminalView: LocalProcessTerminalView {
     /// re-trigger onSendData and cause an infinite broadcast loop.
     var suppressBroadcast = false
 
+    /// Cached before background dispatch — startProcess calls getWindowSize() which
+    /// reads self.frame; NSView.frame must only be accessed on the main thread.
+    nonisolated(unsafe) var cachedWindowSize: winsize?
+
+    override func getWindowSize() -> winsize {
+        cachedWindowSize ?? super.getWindowSize()
+    }
+
     override func send(source: TerminalView, data: ArraySlice<UInt8>) {
         super.send(source: source, data: data)   // PTY receives input as normal
         if !suppressBroadcast {
@@ -38,7 +46,7 @@ final class TerminalWindowView: NSView {
     /// Fired when a drag or resize gesture completes; carries (fromFrame, toFrame).
     var onMoveEnded: ((CGRect, CGRect) -> Void)?
     /// Called during drag with the proposed frame; returns the (possibly snapped) frame.
-    var snapFrame: ((CGRect) -> CGRect)?
+    var snapFrame: ((CGRect, ResizeHandleView.Edge?) -> CGRect)?
     var clearSnapGuides: (() -> Void)?
     /// Raw input bytes to broadcast (only fired if broadcast mode is active upstream).
     var onBroadcastKey: ((Data) -> Void)?
@@ -122,7 +130,7 @@ final class TerminalWindowView: NSView {
             let proposed = CGRect(x: self.frame.origin.x + screenDX / zoom,
                                   y: self.frame.origin.y - screenDY / zoom,
                                   width: self.frame.width, height: self.frame.height)
-            self.frame = self.snapFrame?(proposed) ?? proposed
+            self.frame = self.snapFrame?(proposed, nil) ?? proposed
             self.onMoved?()
         }
 
@@ -210,6 +218,10 @@ final class TerminalWindowView: NSView {
         let shellPath = shell
         let scrollbackLines = settings.scrollbackLines
         let cursorStyle = settings.swiftTermCursorStyle
+
+        // Cache window size before background dispatch — startProcess calls getWindowSize()
+        // which reads self.frame; that must happen on the main thread.
+        termView!.cachedWindowSize = termView!.getWindowSize()
 
         // Run forkpty on a background thread so the ~2 s atfork-handler cost
         // (libBacktraceRecording) doesn't block the main thread and cause a beachball.
@@ -362,7 +374,7 @@ final class TerminalWindowView: NSView {
         // Apply edge-aware snapping: call snapFrame to find alignment deltas, then
         // apply each delta to the dimension that's actually moving for this edge.
         if let snap = snapFrame {
-            let snapped = snap(r)
+            let snapped = snap(r, edge)
             let sdx = snapped.origin.x - r.origin.x
             let sdy = snapped.origin.y - r.origin.y
 

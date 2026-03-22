@@ -72,8 +72,6 @@ final class CanvasViewController: NSViewController {
     // MARK: - State
 
     private var broadcastMode = false
-    private var focusFollowsCenter = false
-    private var focusFollowsCenterTimer: Timer?
     private var saveDebounceTimer: Timer?
     private var workspaceRestored = false
     private var currentTheme: Theme = {
@@ -149,7 +147,7 @@ final class CanvasViewController: NSViewController {
             updateZoomLabel()
             scheduleSave()
             pendingViewportUpdate = true
-            if focusFollowsCenter { scheduleFocusFollowsCenter() }
+            if toolPalette.focusFollowsCenter { updateFocusFollowsCenter() }
         }
     }
 
@@ -163,14 +161,6 @@ final class CanvasViewController: NSViewController {
 
         toolPalette.onToolSelected = { [weak self] tool in
             self?.canvasView.activeTool = tool
-        }
-
-        toolPalette.onSnappingToggled = { [weak self] enabled in
-            self?.snappingEnabled = enabled
-        }
-
-        toolPalette.onFocusFollowsCenterToggled = { [weak self] enabled in
-            self?.focusFollowsCenter = enabled
         }
 
         canvasView.onToolBegan = { [weak self] tool, worldPt in
@@ -317,9 +307,9 @@ final class CanvasViewController: NSViewController {
                 vc.moveTerminal(tw, to: fromFrame)
             }
         }
-        tw.snapFrame = { [weak self, weak tw] proposed in
+        tw.snapFrame = { [weak self, weak tw] proposed, edge in
             guard let self else { return proposed }
-            return self.snapPosition(proposed, excludingTerminal: tw)
+            return self.snapPosition(proposed, excludingTerminal: tw, edge: edge)
         }
         tw.clearSnapGuides = { [weak self] in self?.snapOverlay.guides = [] }
 
@@ -481,9 +471,9 @@ final class CanvasViewController: NSViewController {
             }
             undoManager?.endUndoGrouping()
         }
-        av.snapFrame = { [weak self, weak av] proposed in
+        av.snapFrame = { [weak self, weak av] proposed, edge in
             guard let self else { return proposed }
-            return self.snapPosition(proposed, excludingAnnotation: av)
+            return self.snapPosition(proposed, excludingAnnotation: av, edge: edge)
         }
         av.clearSnapGuides = { [weak self] in self?.snapOverlay.guides = [] }
         undoManager?.beginUndoGrouping()
@@ -541,7 +531,6 @@ final class CanvasViewController: NSViewController {
 
     // MARK: - Snap overlay
 
-    private var snappingEnabled: Bool = true
     private let snapOverlay = SnapGuideOverlay()
 
     private func setupSnapOverlay() {
@@ -571,12 +560,29 @@ final class CanvasViewController: NSViewController {
 
     private func snapPosition(_ proposed: CGRect,
                                excludingAnnotation: AnnotationView? = nil,
-                               excludingTerminal: TerminalWindowView? = nil) -> CGRect {
-        guard snappingEnabled else { return proposed }
+                               excludingTerminal: TerminalWindowView? = nil,
+                               edge: ResizeHandleView.Edge? = nil) -> CGRect {
+        guard toolPalette.snappingEnabled else { return proposed }
         let threshold = 4.0 / canvasView.viewport.zoom
         let others = allElementFrames(excludingAnnotation: excludingAnnotation,
                                       excludingTerminal: excludingTerminal)
-        let snap = snapRect(proposed, to: others, threshold: threshold)
+        let (movingX, movingY): ([CGFloat]?, [CGFloat]?)
+        if let edge {
+            switch edge {
+            case .left:       movingX = [proposed.minX]; movingY = []
+            case .right:      movingX = [proposed.maxX]; movingY = []
+            case .top:        movingX = [];              movingY = [proposed.minY]
+            case .bottom:     movingX = [];              movingY = [proposed.maxY]
+            case .topLeft:    movingX = [proposed.minX]; movingY = [proposed.minY]
+            case .topRight:   movingX = [proposed.maxX]; movingY = [proposed.minY]
+            case .bottomLeft: movingX = [proposed.minX]; movingY = [proposed.maxY]
+            case .bottomRight:movingX = [proposed.maxX]; movingY = [proposed.maxY]
+            }
+        } else {
+            movingX = nil; movingY = nil
+        }
+        let snap = snapRect(proposed, to: others, threshold: threshold,
+                            movingX: movingX, movingY: movingY)
 
         var guides: [(isVertical: Bool, pos: CGFloat)] = []
         if let wx = snap.worldX {
@@ -590,8 +596,7 @@ final class CanvasViewController: NSViewController {
     }
 
     @objc func toggleSnapping() {
-        snappingEnabled.toggle()
-        toolPalette.snappingEnabled = snappingEnabled
+        toolPalette.snappingEnabled.toggle()
     }
 
     // MARK: - Tool keyboard shortcuts
@@ -788,6 +793,7 @@ final class CanvasViewController: NSViewController {
         }
 
         zoomToFitAllElements()
+        updateFocusFollowsCenter()
     }
 
     private func zoomToFitAllElements() {
@@ -850,15 +856,8 @@ final class CanvasViewController: NSViewController {
                            annotations: annotations, focusedWindow: canvasView.activeTerminal)
     }
 
-    private func scheduleFocusFollowsCenter() {
-        focusFollowsCenterTimer?.invalidate()
-        focusFollowsCenterTimer = Timer.scheduledTimer(withTimeInterval: 0.15, repeats: false) { [weak self] _ in
-            Task { @MainActor [weak self] in self?.updateFocusFollowsCenter() }
-        }
-    }
-
     private func updateFocusFollowsCenter() {
-        guard focusFollowsCenter else { return }
+        guard toolPalette.focusFollowsCenter else { return }
         let screenCenter = CGPoint(x: canvasView.bounds.midX, y: canvasView.bounds.midY)
         let worldCenter = canvasView.viewport.screenToWorld(screenCenter)
         guard let closest = terminalManager.windows.min(by: {
@@ -912,20 +911,35 @@ final class CanvasViewController: NSViewController {
         removeTerminal(tw)
     }
 
-    /// Focus the next terminal (sorted left-to-right) and snap the viewport to it.
-    @objc func focusNextTerminal() {
-        let windows = terminalManager.windows.sorted { $0.frame.minX < $1.frame.minX }
-        guard !windows.isEmpty else { return }
-        let idx = canvasView.activeTerminal.flatMap { windows.firstIndex(of: $0) } ?? -1
-        snapViewportToTerminal(windows[(idx + 1) % windows.count])
+    @objc func focusTerminalLeft()  { focusNearest(.left)  }
+    @objc func focusTerminalRight() { focusNearest(.right) }
+    @objc func focusTerminalUp()    { focusNearest(.up)    }
+    @objc func focusTerminalDown()  { focusNearest(.down)  }
+
+    enum FocusDirection {
+        case left, right, up, down
+        func contains(_ candidate: CGPoint, relativeTo origin: CGPoint) -> Bool {
+            switch self {
+            case .left:  return candidate.x < origin.x
+            case .right: return candidate.x > origin.x
+            case .up:    return candidate.y < origin.y
+            case .down:  return candidate.y > origin.y
+            }
+        }
     }
 
-    /// Focus the previous terminal (sorted left-to-right) and snap the viewport to it.
-    @objc func focusPreviousTerminal() {
-        let windows = terminalManager.windows.sorted { $0.frame.minX < $1.frame.minX }
-        guard !windows.isEmpty else { return }
-        let idx = canvasView.activeTerminal.flatMap { windows.firstIndex(of: $0) } ?? 0
-        snapViewportToTerminal(windows[(idx - 1 + windows.count) % windows.count])
+    private func focusNearest(_ direction: FocusDirection) {
+        guard !terminalManager.windows.isEmpty else { return }
+        let current = canvasView.activeTerminal
+        let origin = current?.frame.center ?? canvasView.viewport.screenToWorld(
+            CGPoint(x: canvasView.bounds.midX, y: canvasView.bounds.midY))
+        let candidates = terminalManager.windows.filter {
+            $0 !== current && direction.contains($0.frame.center, relativeTo: origin)
+        }
+        guard let nearest = candidates.min(by: {
+            $0.frame.center.distance(to: origin) < $1.frame.center.distance(to: origin)
+        }) else { return }
+        snapViewportToTerminal(nearest)
     }
 
     private func snapViewportToTerminal(_ tw: TerminalWindowView) {
@@ -993,7 +1007,7 @@ extension CanvasViewController: NSMenuItemValidation {
             menuItem.state = broadcastMode ? .on : .off
         }
         if menuItem.action == #selector(toggleSnapping) {
-            menuItem.state = snappingEnabled ? .on : .off
+            menuItem.state = toolPalette.snappingEnabled ? .on : .off
         }
         return true
     }

@@ -11,13 +11,13 @@ class AnnotationView: NSView {
     /// Fired after a completed drag; carries (fromFrame, toFrame).
     var onDragEnded: ((CGRect, CGRect) -> Void)?
 
-    var snapFrame: ((CGRect) -> CGRect)?
+    var snapFrame: ((CGRect, ResizeHandleView.Edge?) -> CGRect)?
     var clearSnapGuides: (() -> Void)?
 
     private var dragStart: CGPoint?
     private var frameAtDragStart: CGRect?
-    private var lastDraggedOrigin: CGPoint = .zero
     fileprivate(set) var didDrag = false
+    var frameBeforeResize: CGRect = .zero
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -58,7 +58,6 @@ class AnnotationView: NSView {
         guard canvasView?.activeTool == .pointer else { return }
         dragStart = event.locationInWindow
         frameAtDragStart = frame
-        lastDraggedOrigin = frame.origin
         didDrag = false
         CanvasCursorManager.beginDrag(.closedHand, in: window)
     }
@@ -79,12 +78,11 @@ class AnnotationView: NSView {
         let proposed = CGRect(origin: CGPoint(x: origin.origin.x + totalDX,
                                               y: origin.origin.y + totalDY),
                               size: origin.size)
-        let snapped = snapFrame?(proposed) ?? proposed
-        // Pass only the incremental delta to subclasses so they don't accumulate totals.
-        let incrDX = snapped.origin.x - lastDraggedOrigin.x
-        let incrDY = snapped.origin.y - lastDraggedOrigin.y
+        let snapped = snapFrame?(proposed, nil) ?? proposed
+        // Pass only the incremental delta so subclasses don't accumulate totals.
+        let incrDX = snapped.origin.x - frame.origin.x
+        let incrDY = snapped.origin.y - frame.origin.y
         frame.origin = snapped.origin
-        lastDraggedOrigin = snapped.origin
         didMoveByDelta(dx: incrDX, dy: incrDY)
         onChanged?()
     }
@@ -102,6 +100,28 @@ class AnnotationView: NSView {
 
     /// Override in subclasses that store absolute world points (arrow, freehand).
     func didMoveByDelta(dx: CGFloat, dy: CGFloat) {}
+
+    // MARK: - Resize handles
+
+    /// Override in subclasses that support resizing.
+    func handleResize(edge: ResizeHandleView.Edge, screenDX: CGFloat, screenDY: CGFloat) {}
+
+    /// Call from subclass `setup()` to install the 8 resize handles.
+    func setupResizeHandles() {
+        for edge in ResizeHandleView.Edge.allCases {
+            let h = ResizeHandleView(edge: edge)
+            h.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(h)
+            h.installConstraints(in: self)
+            h.onResizeBegan = { [weak self] in self?.frameBeforeResize = self?.frame ?? .zero }
+            h.onResize = { [weak self] dx, dy in self?.handleResize(edge: edge, screenDX: dx, screenDY: dy) }
+            h.onResizeEnded = { [weak self] in
+                guard let self else { return }
+                clearSnapGuides?()
+                if frame != frameBeforeResize { onDragEnded?(frameBeforeResize, frame) }
+            }
+        }
+    }
 
     // MARK: - Snapshot support
 
@@ -230,7 +250,6 @@ final class StickyNoteView: AnnotationView {
     private let titleBar = NSView()
 
     private let minSize = CGSize(width: 120, height: 80)
-    private var frameBeforeResize: CGRect = .zero
 
     init(at worldPt: CGPoint, color: NoteColor = .yellow, text: String = "") {
         super.init(frame: CGRect(x: worldPt.x, y: worldPt.y, width: 200, height: 160))
@@ -283,23 +302,7 @@ final class StickyNoteView: AnnotationView {
         setupResizeHandles()
     }
 
-    private func setupResizeHandles() {
-        for edge in ResizeHandleView.Edge.allCases {
-            let h = ResizeHandleView(edge: edge)
-            h.translatesAutoresizingMaskIntoConstraints = false
-            addSubview(h)
-            h.installConstraints(in: self)
-            h.onResizeBegan = { [weak self] in self?.frameBeforeResize = self?.frame ?? .zero }
-            h.onResize = { [weak self] dx, dy in self?.handleResize(edge: edge, screenDX: dx, screenDY: dy) }
-            h.onResizeEnded = { [weak self] in
-                guard let self else { return }
-                clearSnapGuides?()
-                if frame != frameBeforeResize { onDragEnded?(frameBeforeResize, frame) }
-            }
-        }
-    }
-
-    private func handleResize(edge: ResizeHandleView.Edge, screenDX: CGFloat, screenDY: CGFloat) {
+    override func handleResize(edge: ResizeHandleView.Edge, screenDX: CGFloat, screenDY: CGFloat) {
         guard let cv = canvasView else { return }
         let zoom = cv.currentZoom
         let dx = screenDX / zoom
@@ -333,7 +336,7 @@ final class StickyNoteView: AnnotationView {
         r.size.height = max(r.size.height, minSize.height)
 
         if let snap = snapFrame {
-            let snapped = snap(r)
+            let snapped = snap(r, edge)
             let sdx = snapped.origin.x - r.origin.x
             let sdy = snapped.origin.y - r.origin.y
 
@@ -550,7 +553,6 @@ final class ImageAnnotationView: AnnotationView {
     private var savedImagePath: String?
     /// Width / height of the source image. Maintained during resize.
     let aspectRatio: CGFloat
-    private var frameBeforeResize: CGRect = .zero
 
     init(at worldPt: CGPoint, image: NSImage) {
         let s = image.size
@@ -586,30 +588,14 @@ final class ImageAnnotationView: AnnotationView {
         setupResizeHandles()
     }
 
-    private func setupResizeHandles() {
-        for edge in ResizeHandleView.Edge.allCases {
-            let h = ResizeHandleView(edge: edge)
-            h.translatesAutoresizingMaskIntoConstraints = false
-            addSubview(h)
-            h.installConstraints(in: self)
-            h.onResizeBegan = { [weak self] in self?.frameBeforeResize = self?.frame ?? .zero }
-            h.onResize = { [weak self] dx, dy in self?.handleResize(edge: edge, screenDX: dx, screenDY: dy) }
-            h.onResizeEnded = { [weak self] in
-                guard let self else { return }
-                clearSnapGuides?()
-                if frame != frameBeforeResize { onDragEnded?(frameBeforeResize, frame) }
-            }
-        }
-    }
 
-    private func handleResize(edge: ResizeHandleView.Edge, screenDX: CGFloat, screenDY: CGFloat) {
+    override func handleResize(edge: ResizeHandleView.Edge, screenDX: CGFloat, screenDY: CGFloat) {
         guard let cv = canvasView else { return }
         let zoom = cv.currentZoom
         let dx = screenDX / zoom
         let dy = -screenDY / zoom
         let minW: CGFloat = 80
 
-        // Compute unconstrained proposed frame
         var r = frame
         switch edge {
         case .topLeft:

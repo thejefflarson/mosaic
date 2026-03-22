@@ -37,6 +37,35 @@ final class UtilityTests: XCTestCase {
         XCTAssertEqual(Double(2.0).clamped(to:  0.0...1.0), 1.0)
     }
 
+    // MARK: - CGRect.center
+
+    func testCGRectCenter() {
+        let r = CGRect(x: 10, y: 20, width: 80, height: 60)
+        XCTAssertEqual(r.center, CGPoint(x: 50, y: 50))
+    }
+
+    func testCGRectCenterSquare() {
+        let r = CGRect(x: 0, y: 0, width: 100, height: 100)
+        XCTAssertEqual(r.center, CGPoint(x: 50, y: 50))
+    }
+
+    // MARK: - CGPoint.distance
+
+    func testDistanceZero() {
+        let p = CGPoint(x: 3, y: 4)
+        XCTAssertEqual(p.distance(to: p), 0)
+    }
+
+    func testDistance3_4_5() {
+        XCTAssertEqual(CGPoint(x: 0, y: 0).distance(to: CGPoint(x: 3, y: 4)), 5)
+    }
+
+    func testDistanceIsSymmetric() {
+        let a = CGPoint(x: 1, y: 2)
+        let b = CGPoint(x: 4, y: 6)
+        XCTAssertEqual(a.distance(to: b), b.distance(to: a))
+    }
+
     // MARK: - CGRect center init
 
     func testCGRectCenterInit() {
