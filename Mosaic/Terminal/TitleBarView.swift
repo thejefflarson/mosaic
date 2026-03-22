@@ -94,6 +94,11 @@ final class TitleBarView: NSView {
         }
     }
 
+    func applyTheme(background: NSColor, foreground: NSColor) {
+        layer?.backgroundColor = background.cgColor
+        titleLabel.textColor = foreground.withAlphaComponent(0.7)
+    }
+
     @objc private func closePressed() {
         onClose?()
     }

@@ -294,11 +294,11 @@ final class TerminalWindowView: NSView {
         termView.font = theme.terminalFont
         termView.feed(text: theme.oscSequences)
         layer?.backgroundColor = theme.terminalBackground.cgColor
-        titleBar.layer?.backgroundColor = theme.terminalBackground.cgColor
+        titleBar.applyTheme(background: theme.terminalBackground, foreground: theme.terminalForeground)
     }
 
     private func syncTitleBarColor() {
-        titleBar.layer?.backgroundColor = theme.terminalBackground.cgColor
+        titleBar.applyTheme(background: theme.terminalBackground, foreground: theme.terminalForeground)
     }
 
     // MARK: - Resize handles

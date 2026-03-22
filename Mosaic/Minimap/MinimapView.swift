@@ -134,7 +134,13 @@ final class MinimapView: NSView {
             annotImages.append((av.frame, img))
         }
         let focusedID = focusedWindowID
-        let windowFrames = windows.map { (frame: $0.frame, title: $0.currentTitle, isActive: $0.id == focusedID) }
+        let windowFrames = windows.map { (
+            frame: $0.frame,
+            title: $0.currentTitle,
+            isActive: $0.id == focusedID,
+            bgColor: $0.theme.terminalBackground,
+            fgColor: $0.theme.terminalForeground
+        ) }
 
         // Compose the minimap image using simple shapes — no layer.render() calls
         // so we don't interfere with SwiftTerm's Metal rendering pipeline.
@@ -157,7 +163,7 @@ final class MinimapView: NSView {
                          fraction: 1, respectFlipped: false, hints: nil)
             }
 
-            // Terminal windows — dark box with a lighter title bar strip
+            // Terminal windows — themed body color with a small close dot, no title bar strip
             for wf in windowFrames {
                 let frame = wf.frame
                 let dest = NSRect(
@@ -166,21 +172,22 @@ final class MinimapView: NSView {
                     width:  max(frame.width  * scale, 4),
                     height: max(frame.height * scale, 4)
                 )
-                // Body
-                NSColor(red: 0.12, green: 0.12, blue: 0.14, alpha: 1).setFill()
+                // Body — use the terminal's actual theme background
+                wf.bgColor.setFill()
                 let bodyPath = NSBezierPath(roundedRect: dest, xRadius: 2, yRadius: 2)
                 bodyPath.fill()
-                // Title bar strip
-                let barH = max(dest.height * 0.12, 3)
-                let bar = NSRect(x: dest.minX, y: dest.minY, width: dest.width, height: barH)
-                NSColor(white: 0.25, alpha: 1).setFill()
-                bar.fill()
+                // Close dot — small circle top-left, colored from the foreground at low opacity
+                let dotD = max(min(dest.width * 0.08, dest.height * 0.12, 5), 2)
+                let dotX = dest.minX + dotD * 0.8
+                let dotY = dest.minY + dotD * 0.8
+                wf.fgColor.withAlphaComponent(0.35).setFill()
+                NSBezierPath(ovalIn: NSRect(x: dotX, y: dotY, width: dotD, height: dotD)).fill()
                 // Border — bright blue for the focused terminal, subtle otherwise
                 if wf.isActive {
                     NSColor.systemBlue.setStroke()
                     bodyPath.lineWidth = 1.5
                 } else {
-                    NSColor(white: 0.35, alpha: 1).setStroke()
+                    wf.fgColor.withAlphaComponent(0.2).setStroke()
                     bodyPath.lineWidth = 0.5
                 }
                 bodyPath.stroke()
