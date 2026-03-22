@@ -4,6 +4,8 @@ An infinite 2D spatial canvas for macOS where real PTY-backed terminal windows c
 
 ![macOS 14+](https://img.shields.io/badge/macOS-14%2B-blue) ![Swift 6](https://img.shields.io/badge/Swift-6.0-orange)
 
+<img src="Docs/icon-concept-a.svg" width="128" alt="Mosaic icon" />
+
 ## What it does
 
 - **Infinite canvas** — pan with two-finger scroll, zoom with pinch or scroll wheel, zoom anchored to cursor position
