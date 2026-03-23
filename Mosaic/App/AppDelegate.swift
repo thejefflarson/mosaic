@@ -16,6 +16,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        // Force a final save so state added since the last debounce isn't lost,
+        // then drain the queue before the process exits.
+        canvasViewController?.saveWorkspace()
         WorkspaceStore.shared.flushSynchronously()
     }
 

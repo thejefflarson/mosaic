@@ -486,6 +486,7 @@ final class CanvasViewController: NSViewController {
         annotations.append(av)
         canvasView.addAnnotation(av)
         updateMinimap()
+        scheduleSave()
     }
 
     func removeAnnotation(_ av: AnnotationView) {
