@@ -4,13 +4,18 @@ import Foundation
 
 /// Tests for WorkspaceStore save/flush/load contract.
 ///
-/// These tests use WorkspaceStore.shared, which writes to the real
-/// ~/Library/Application Support/Mosaic/workspace.json. The suite is
-/// serialized so saves and loads don't interleave.
-@Suite(.serialized)
+/// Each test gets its own WorkspaceStore pointed at a fresh temp directory
+/// so the real ~/Library/Application Support/Mosaic/workspace.json is
+/// never touched.
 struct WorkspaceStoreTests {
 
-    private let store = WorkspaceStore.shared
+    private let store: WorkspaceStore
+
+    init() {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MosaicTests-\(UUID().uuidString)", isDirectory: true)
+        store = WorkspaceStore(directory: tmp)
+    }
 
     private func makeSnapshot(
         panX: CGFloat = 0,

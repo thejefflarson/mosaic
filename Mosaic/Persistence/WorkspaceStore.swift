@@ -8,14 +8,17 @@ final class WorkspaceStore: Sendable {
     let imagesDirectory: URL
     private let queue = DispatchQueue(label: "com.jeff.Mosaic.workspace", qos: .utility)
 
-    private init() {
+    init(directory: URL) {
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        storeURL = directory.appendingPathComponent("workspace.json")
+        imagesDirectory = directory.appendingPathComponent("Images", isDirectory: true)
+        try? FileManager.default.createDirectory(at: imagesDirectory, withIntermediateDirectories: true)
+    }
+
+    private convenience init() {
         let support = FileManager.default.urls(for: .applicationSupportDirectory,
                                                in: .userDomainMask)[0]
-        let dir = support.appendingPathComponent("Mosaic", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        storeURL = dir.appendingPathComponent("workspace.json")
-        imagesDirectory = dir.appendingPathComponent("Images", isDirectory: true)
-        try? FileManager.default.createDirectory(at: imagesDirectory, withIntermediateDirectories: true)
+        self.init(directory: support.appendingPathComponent("Mosaic", isDirectory: true))
     }
 
     func save(_ snapshot: WorkspaceSnapshot) {
