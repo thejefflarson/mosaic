@@ -4,6 +4,7 @@ import AppKit
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var mainWindowController: NSWindowController?
     private var themeMenu: NSMenu?
+    private(set) var canvasViewController: CanvasViewController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupMenuBar()
@@ -20,6 +21,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func openMainWindow() {
         let vc = CanvasViewController()
+        canvasViewController = vc
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1440, height: 900),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],

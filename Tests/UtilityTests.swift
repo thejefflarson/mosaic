@@ -1,87 +1,73 @@
-import XCTest
+import Testing
+import AppKit
 @testable import Mosaic
 
-final class UtilityTests: XCTestCase {
+struct UtilityTests {
 
     // MARK: - Comparable.clamped
 
-    func testClampedMidValue() {
-        XCTAssertEqual(5.clampedTo(1...10), 5)
+    @Test func clampedMidValue()      { #expect(5.clampedTo(1...10)     == 5)   }
+    @Test func clampedLow()           { #expect((-5).clampedTo(0...100) == 0)   }
+    @Test func clampedHigh()          { #expect(200.clampedTo(0...100)  == 100) }
+    @Test func clampedAtLowerBound()  { #expect(0.clampedTo(0...10)     == 0)   }
+    @Test func clampedAtUpperBound()  { #expect(10.clampedTo(0...10)    == 10)  }
+
+    @Test func clampedFloat() {
+        #expect(CGFloat(0.05).clamped(to: 0.1...3.0) == 0.1)
+        #expect(CGFloat(1.5).clamped(to:  0.1...3.0) == 1.5)
+        #expect(CGFloat(5.0).clamped(to:  0.1...3.0) == 3.0)
     }
 
-    func testClampedLow() {
-        XCTAssertEqual((-5).clampedTo(0...100), 0)
-    }
-
-    func testClampedHigh() {
-        XCTAssertEqual(200.clampedTo(0...100), 100)
-    }
-
-    func testClampedAtLowerBound() {
-        XCTAssertEqual(0.clampedTo(0...10), 0)
-    }
-
-    func testClampedAtUpperBound() {
-        XCTAssertEqual(10.clampedTo(0...10), 10)
-    }
-
-    func testClampedFloat() {
-        XCTAssertEqual(CGFloat(0.05).clamped(to: 0.1...3.0), 0.1)
-        XCTAssertEqual(CGFloat(1.5).clamped(to: 0.1...3.0),  1.5)
-        XCTAssertEqual(CGFloat(5.0).clamped(to: 0.1...3.0),  3.0)
-    }
-
-    func testClampedDouble() {
-        XCTAssertEqual(Double(-1.0).clamped(to: 0.0...1.0), 0.0)
-        XCTAssertEqual(Double(0.5).clamped(to:  0.0...1.0), 0.5)
-        XCTAssertEqual(Double(2.0).clamped(to:  0.0...1.0), 1.0)
+    @Test func clampedDouble() {
+        #expect(Double(-1.0).clamped(to: 0.0...1.0) == 0.0)
+        #expect(Double(0.5).clamped(to:  0.0...1.0) == 0.5)
+        #expect(Double(2.0).clamped(to:  0.0...1.0) == 1.0)
     }
 
     // MARK: - CGRect.center
 
-    func testCGRectCenter() {
+    @Test func cgRectCenter() {
         let r = CGRect(x: 10, y: 20, width: 80, height: 60)
-        XCTAssertEqual(r.center, CGPoint(x: 50, y: 50))
+        #expect(r.center == CGPoint(x: 50, y: 50))
     }
 
-    func testCGRectCenterSquare() {
+    @Test func cgRectCenterSquare() {
         let r = CGRect(x: 0, y: 0, width: 100, height: 100)
-        XCTAssertEqual(r.center, CGPoint(x: 50, y: 50))
+        #expect(r.center == CGPoint(x: 50, y: 50))
     }
 
     // MARK: - CGPoint.distance
 
-    func testDistanceZero() {
+    @Test func distanceZero() {
         let p = CGPoint(x: 3, y: 4)
-        XCTAssertEqual(p.distance(to: p), 0)
+        #expect(p.distance(to: p) == 0)
     }
 
-    func testDistance3_4_5() {
-        XCTAssertEqual(CGPoint(x: 0, y: 0).distance(to: CGPoint(x: 3, y: 4)), 5)
+    @Test func distance3_4_5() {
+        #expect(CGPoint(x: 0, y: 0).distance(to: CGPoint(x: 3, y: 4)) == 5)
     }
 
-    func testDistanceIsSymmetric() {
+    @Test func distanceIsSymmetric() {
         let a = CGPoint(x: 1, y: 2)
         let b = CGPoint(x: 4, y: 6)
-        XCTAssertEqual(a.distance(to: b), b.distance(to: a))
+        #expect(a.distance(to: b) == b.distance(to: a))
     }
 
     // MARK: - CGRect center init
 
-    func testCGRectCenterInit() {
+    @Test func cgRectCenterInit() {
         let center = CGPoint(x: 100, y: 200)
         let size   = CGSize(width: 60, height: 40)
         let rect   = CGRect(center: center, size: size)
-        XCTAssertEqual(rect.midX, 100)
-        XCTAssertEqual(rect.midY, 200)
-        XCTAssertEqual(rect.width,  60)
-        XCTAssertEqual(rect.height, 40)
-        XCTAssertEqual(rect.minX, 70)
-        XCTAssertEqual(rect.minY, 180)
+        #expect(rect.midX == 100)
+        #expect(rect.midY == 200)
+        #expect(rect.width  == 60)
+        #expect(rect.height == 40)
+        #expect(rect.minX == 70)
+        #expect(rect.minY == 180)
     }
 }
 
-// Convenience to avoid clunky Int.clamped(to:) call syntax in tests
 private extension Int {
     func clampedTo(_ range: ClosedRange<Int>) -> Int { clamped(to: range) }
 }

@@ -1,9 +1,10 @@
-import XCTest
+import Testing
+import Foundation
 @testable import Mosaic
 
-final class WorkspaceSnapshotTests: XCTestCase {
+struct WorkspaceSnapshotTests {
 
-    private func makeWindowSnapshot(scrollback: String? = nil) -> WorkspaceSnapshot.WindowSnapshot {
+    private func makeWindow(scrollback: String? = nil) -> WorkspaceSnapshot.WindowSnapshot {
         WorkspaceSnapshot.WindowSnapshot(
             id: UUID(), x: 100, y: 200, width: 600, height: 400,
             shell: "/bin/zsh", cwd: "/Users/test", title: "bash",
@@ -11,85 +12,74 @@ final class WorkspaceSnapshotTests: XCTestCase {
         )
     }
 
-    private func makeViewportState() -> WorkspaceSnapshot.ViewportState {
-        WorkspaceSnapshot.ViewportState(panX: 123.5, panY: -45.0, zoom: 1.25)
+    private let viewport = WorkspaceSnapshot.ViewportState(panX: 123.5, panY: -45.0, zoom: 1.25)
+
+    private func roundTrip(_ snapshot: WorkspaceSnapshot) throws -> WorkspaceSnapshot {
+        try JSONDecoder().decode(WorkspaceSnapshot.self, from: JSONEncoder().encode(snapshot))
     }
 
     // MARK: - Round-trip
 
-    func testEncodeDecodeEmpty() throws {
-        let snapshot = WorkspaceSnapshot(viewport: makeViewportState(), windows: [], annotations: [])
-        let data = try JSONEncoder().encode(snapshot)
-        let decoded = try JSONDecoder().decode(WorkspaceSnapshot.self, from: data)
-        XCTAssertEqual(decoded.windows.count, 0)
-        XCTAssertEqual(decoded.annotations.count, 0)
-        XCTAssertEqual(decoded.viewport.panX,  123.5)
-        XCTAssertEqual(decoded.viewport.panY,  -45.0)
-        XCTAssertEqual(decoded.viewport.zoom,  1.25)
+    @Test func encodeDecodeEmpty() throws {
+        let decoded = try roundTrip(WorkspaceSnapshot(viewport: viewport, windows: [], annotations: []))
+        #expect(decoded.windows.count     == 0)
+        #expect(decoded.annotations.count == 0)
+        #expect(decoded.viewport.panX     == 123.5)
+        #expect(decoded.viewport.panY     == -45.0)
+        #expect(decoded.viewport.zoom     == 1.25)
     }
 
-    func testEncodeDecodeWithWindows() throws {
-        let w1 = makeWindowSnapshot()
-        let w2 = makeWindowSnapshot(scrollback: "some history")
-        let snapshot = WorkspaceSnapshot(viewport: makeViewportState(), windows: [w1, w2])
-        let data = try JSONEncoder().encode(snapshot)
-        let decoded = try JSONDecoder().decode(WorkspaceSnapshot.self, from: data)
-        XCTAssertEqual(decoded.windows.count, 2)
-        XCTAssertNil(decoded.windows[0].scrollback)
-        XCTAssertEqual(decoded.windows[1].scrollback, "some history")
+    @Test func encodeDecodeWithWindows() throws {
+        let decoded = try roundTrip(
+            WorkspaceSnapshot(viewport: viewport,
+                              windows: [makeWindow(), makeWindow(scrollback: "some history")]))
+        #expect(decoded.windows.count       == 2)
+        #expect(decoded.windows[0].scrollback == nil)
+        #expect(decoded.windows[1].scrollback == "some history")
     }
 
-    func testScrollbackPreserved() throws {
-        let multiline = "line1\r\nline2\r\nline3"
-        let w = makeWindowSnapshot(scrollback: multiline)
-        let snapshot = WorkspaceSnapshot(viewport: makeViewportState(), windows: [w])
-        let data = try JSONEncoder().encode(snapshot)
-        let decoded = try JSONDecoder().decode(WorkspaceSnapshot.self, from: data)
-        XCTAssertEqual(decoded.windows[0].scrollback, multiline)
+    @Test func scrollbackPreserved() throws {
+        let text    = "line1\r\nline2\r\nline3"
+        let decoded = try roundTrip(WorkspaceSnapshot(viewport: viewport,
+                                                      windows: [makeWindow(scrollback: text)]))
+        #expect(decoded.windows[0].scrollback == text)
     }
 
-    func testWindowFieldsPreserved() throws {
+    @Test func windowFieldsPreserved() throws {
         let id = UUID()
-        let w = WorkspaceSnapshot.WindowSnapshot(
+        let w  = WorkspaceSnapshot.WindowSnapshot(
             id: id, x: 10, y: 20, width: 300, height: 200,
             shell: "/bin/bash", cwd: "/tmp", title: "test", scrollback: nil
         )
-        let snapshot = WorkspaceSnapshot(viewport: makeViewportState(), windows: [w])
-        let data = try JSONEncoder().encode(snapshot)
-        let decoded = try JSONDecoder().decode(WorkspaceSnapshot.self, from: data)
-        let dw = decoded.windows[0]
-        XCTAssertEqual(dw.id,     id)
-        XCTAssertEqual(dw.x,      10)
-        XCTAssertEqual(dw.y,      20)
-        XCTAssertEqual(dw.width,  300)
-        XCTAssertEqual(dw.height, 200)
-        XCTAssertEqual(dw.shell,  "/bin/bash")
-        XCTAssertEqual(dw.cwd,    "/tmp")
-        XCTAssertEqual(dw.title,  "test")
+        let dw = try roundTrip(WorkspaceSnapshot(viewport: viewport, windows: [w])).windows[0]
+        #expect(dw.id     == id)
+        #expect(dw.x      == 10)
+        #expect(dw.y      == 20)
+        #expect(dw.width  == 300)
+        #expect(dw.height == 200)
+        #expect(dw.shell  == "/bin/bash")
+        #expect(dw.cwd    == "/tmp")
+        #expect(dw.title  == "test")
     }
 
     // MARK: - Backward compatibility
 
-    func testMissingAnnotationsFieldDecodesAsEmpty() throws {
-        // JSON without the "annotations" key — simulates a snapshot saved by an older version
+    @Test func missingAnnotationsFieldDecodesAsEmpty() throws {
         let json = """
-        {
-          "viewport": {"panX": 0, "panY": 0, "zoom": 1},
-          "windows": []
-        }
+        {"viewport":{"panX":0,"panY":0,"zoom":1},"windows":[]}
         """.data(using: .utf8)!
         let decoded = try JSONDecoder().decode(WorkspaceSnapshot.self, from: json)
-        XCTAssertEqual(decoded.annotations.count, 0)
+        #expect(decoded.annotations.count == 0)
     }
 
     // MARK: - ViewportState
 
-    func testViewportStateRoundTrip() throws {
-        let vp = WorkspaceSnapshot.ViewportState(panX: -100, panY: 50, zoom: 0.5)
-        let data = try JSONEncoder().encode(vp)
-        let decoded = try JSONDecoder().decode(WorkspaceSnapshot.ViewportState.self, from: data)
-        XCTAssertEqual(decoded.panX, -100)
-        XCTAssertEqual(decoded.panY,   50)
-        XCTAssertEqual(decoded.zoom,  0.5)
+    @Test func viewportStateRoundTrip() throws {
+        let vp      = WorkspaceSnapshot.ViewportState(panX: -100, panY: 50, zoom: 0.5)
+        let decoded = try JSONDecoder().decode(
+            WorkspaceSnapshot.ViewportState.self, from: JSONEncoder().encode(vp))
+        #expect(decoded.panX == -100)
+        #expect(decoded.panY == 50)
+        #expect(decoded.zoom == 0.5)
     }
 }

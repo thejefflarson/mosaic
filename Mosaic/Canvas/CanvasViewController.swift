@@ -918,12 +918,28 @@ final class CanvasViewController: NSViewController {
 
     enum FocusDirection {
         case left, right, up, down
+
         func contains(_ candidate: CGPoint, relativeTo origin: CGPoint) -> Bool {
             switch self {
             case .left:  return candidate.x < origin.x
             case .right: return candidate.x > origin.x
             case .up:    return candidate.y < origin.y
             case .down:  return candidate.y > origin.y
+            }
+        }
+
+        /// Sort key for picking the "most directly in this direction" terminal.
+        /// Returns (perpendicular deviation, axial distance).
+        /// Candidates with smaller perpendicular deviation rank first; axial distance
+        /// breaks ties. Example: Cmd+Left uses (|Δy|, |Δx|) so a terminal that's
+        /// far left but on the same horizontal line beats one that's barely left
+        /// but 1000px above.
+        func nearestKey(for candidate: CGPoint, relativeTo origin: CGPoint) -> (CGFloat, CGFloat) {
+            let dx = abs(candidate.x - origin.x)
+            let dy = abs(candidate.y - origin.y)
+            switch self {
+            case .left, .right: return (dy, dx)
+            case .up, .down:    return (dx, dy)
             }
         }
     }
@@ -937,7 +953,9 @@ final class CanvasViewController: NSViewController {
             $0 !== current && direction.contains($0.frame.center, relativeTo: origin)
         }
         guard let nearest = candidates.min(by: {
-            $0.frame.center.distance(to: origin) < $1.frame.center.distance(to: origin)
+            let ak = direction.nearestKey(for: $0.frame.center, relativeTo: origin)
+            let bk = direction.nearestKey(for: $1.frame.center, relativeTo: origin)
+            return ak == bk ? false : ak < bk
         }) else { return }
         snapViewportToTerminal(nearest)
     }
@@ -977,6 +995,38 @@ final class CanvasViewController: NSViewController {
         vp.panY = -paddedUnion.minY * zoom + (canvasView.bounds.height - paddedUnion.height * zoom) / 2
         canvasView.setViewport(vp)
     }
+}
+
+// MARK: - AppleScript / Scripting API
+
+extension CanvasViewController {
+
+    /// Pan and activate the first terminal whose working directory matches `path`.
+    /// - Returns: `true` if a terminal was found and focused.
+    @discardableResult
+    func focusTerminalInDirectory(_ path: String) -> Bool {
+        let target = URL(fileURLWithPath: path, isDirectory: true).standardized
+        guard let match = terminalManager.windows.first(where: {
+            URL(fileURLWithPath: $0.currentCwd, isDirectory: true).standardized == target
+        }) else { return false }
+        snapViewportToTerminal(match)
+        return true
+    }
+
+    /// Spawn a new terminal, optionally at `path`, centered in the current viewport.
+    func openTerminalViaScript(at path: String?) {
+        let center = canvasView.viewport.screenToWorld(
+            CGPoint(x: canvasView.bounds.midX, y: canvasView.bounds.midY))
+        spawnTerminal(at: center, cwd: path)
+    }
+
+    /// Working directory of the active terminal, or empty string if none is focused.
+    var activeTerminalWorkingDirectory: String {
+        canvasView.activeTerminal?.currentCwd ?? ""
+    }
+
+    /// Number of open terminals on the canvas.
+    var terminalCount: Int { terminalManager.windows.count }
 }
 
 // MARK: - Undo / Redo

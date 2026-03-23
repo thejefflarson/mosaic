@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE dictionary SYSTEM "file://localhost/System/Library/DTDs/sdef.dtd">
+<dictionary title="Mosaic Terminology">
+
+  <suite name="Mosaic Suite" code="Mosa"
+         description="Commands and properties for controlling the Mosaic canvas.">
+
+    <!-- focus terminal "/path/to/dir"
+         Returns true if a matching terminal was found and focused. -->
+    <command name="focus terminal" code="MosaFcTm"
+             description="Pan the canvas to the first terminal whose working directory matches the given path and make it active.">
+      <cocoa class="FocusTerminalCommand"/>
+      <direct-parameter description="The directory path to match." type="text"/>
+      <result description="True if a matching terminal was found." type="boolean"/>
+    </command>
+
+    <!-- open terminal at "/path/to/dir" -->
+    <command name="open terminal" code="MosaOpTm"
+             description="Open a new terminal on the canvas, optionally at the given working directory.">
+      <cocoa class="OpenTerminalCommand"/>
+      <parameter name="at" code="MsAt" description="Working directory for the new terminal. Defaults to home." type="text" optional="yes"/>
+    </command>
+
+    <!-- Properties on the application object -->
+    <class-extension extends="application"
+                     description="Mosaic additions to the standard application class.">
+
+      <property name="working directory" code="WkDr"
+                description="Working directory of the currently focused terminal. Empty string if no terminal is active."
+                type="text" access="r"/>
+
+      <property name="terminal count" code="TmCt"
+                description="The number of open terminals on the canvas."
+                type="integer" access="r"/>
+
+    </class-extension>
+
+  </suite>
+
+</dictionary>

@@ -234,6 +234,10 @@ final class TerminalWindowView: NSView {
                 currentDirectory: cwd
             )
             DispatchQueue.main.async {
+                // Clear the cached size now that the process is running.
+                // sizeChanged() calls getWindowSize() to build the TIOCSWINSZ winsize;
+                // from this point it must read the live frame, not the startup snapshot.
+                termView!.cachedWindowSize = nil
                 termView!.changeScrollback(scrollbackLines)
                 termView!.getTerminal().setCursorStyle(cursorStyle)
             }

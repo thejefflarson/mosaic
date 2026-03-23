@@ -21,9 +21,11 @@ targets:
           - Resources/Info.plist
     resources:
       - path: Mosaic/Resources/Assets.xcassets
+      - path: Mosaic/App/Mosaic.sdef
     info:
       path: Mosaic/Resources/Info.plist
       properties:
+        OSAScriptingDefinition: Mosaic.sdef
         CFBundleDisplayName: Mosaic
         CFBundleIdentifier: com.jeff.Mosaic
         CFBundleVersion: "1"

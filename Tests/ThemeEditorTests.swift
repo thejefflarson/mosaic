@@ -1,193 +1,161 @@
-import XCTest
+import Testing
+import AppKit
 @testable import Mosaic
 
-final class ThemeEditorTests: XCTestCase {
+struct ThemeEditorTests {
 
     // MARK: - buildPreviewTheme
 
-    func testBuildPreviewThemePreservesSourceID() {
-        let model = ThemeEditorModel(theme: Theme.dark)
-        let preview = model.buildPreviewTheme()
-        XCTAssertEqual(preview.id, Theme.dark.id)
+    @Test func buildPreviewThemePreservesSourceID() {
+        #expect(ThemeEditorModel(theme: Theme.dark).buildPreviewTheme().id == Theme.dark.id)
     }
 
-    func testBuildPreviewThemePreservesSourceIDForCustomTheme() {
+    @Test func buildPreviewThemePreservesSourceIDForCustomTheme() {
         let custom = Theme(id: "my-theme", name: "My Theme",
                            canvasBackground: .black, terminalBackground: .black,
                            terminalForeground: .white, ansi: Theme.dark.ansi)
-        let model = ThemeEditorModel(theme: custom)
-        XCTAssertEqual(model.buildPreviewTheme().id, "my-theme")
+        #expect(ThemeEditorModel(theme: custom).buildPreviewTheme().id == "my-theme")
     }
 
-    func testBuildPreviewThemeIsStableAcrossMultipleCalls() {
+    @Test func buildPreviewThemeIsStableAcrossMultipleCalls() {
         let model = ThemeEditorModel(theme: Theme.oneDark)
-        let id1 = model.buildPreviewTheme().id
-        let id2 = model.buildPreviewTheme().id
-        XCTAssertEqual(id1, id2)
+        #expect(model.buildPreviewTheme().id == model.buildPreviewTheme().id)
     }
 
     // MARK: - buildNewTheme
 
-    func testBuildNewThemeHasFreshUUID() {
-        let model = ThemeEditorModel(theme: Theme.dark)
-        let t = model.buildNewTheme()
-        // Must be a valid UUID string
-        XCTAssertNotNil(UUID(uuidString: t.id))
+    @Test func buildNewThemeHasFreshUUID() {
+        let t = ThemeEditorModel(theme: Theme.dark).buildNewTheme()
+        #expect(UUID(uuidString: t.id) != nil)
     }
 
-    func testBuildNewThemeIDDiffersFromSourceID() {
-        let model = ThemeEditorModel(theme: Theme.dark)
-        XCTAssertNotEqual(model.buildNewTheme().id, Theme.dark.id)
+    @Test func buildNewThemeIDDiffersFromSourceID() {
+        #expect(ThemeEditorModel(theme: Theme.dark).buildNewTheme().id != Theme.dark.id)
     }
 
-    func testBuildNewThemeProducesUniqueIDsEachCall() {
+    @Test func buildNewThemeProducesUniqueIDsEachCall() {
         let model = ThemeEditorModel(theme: Theme.dark)
-        let id1 = model.buildNewTheme().id
-        let id2 = model.buildNewTheme().id
-        XCTAssertNotEqual(id1, id2)
+        #expect(model.buildNewTheme().id != model.buildNewTheme().id)
     }
 
     // MARK: - Name handling
 
-    func testEmptyNameDefaultsToCustom() {
-        let model = ThemeEditorModel(theme: Theme.dark)
-        model.name = ""
-        XCTAssertEqual(model.buildPreviewTheme().name, "Custom")
+    @Test func emptyNameDefaultsToCustom() {
+        let model = ThemeEditorModel(theme: Theme.dark); model.name = ""
+        #expect(model.buildPreviewTheme().name == "Custom")
     }
 
-    func testWhitespaceOnlyNameDefaultsToCustom() {
-        let model = ThemeEditorModel(theme: Theme.dark)
-        model.name = "   "
-        XCTAssertEqual(model.buildPreviewTheme().name, "Custom")
+    @Test func whitespaceOnlyNameDefaultsToCustom() {
+        let model = ThemeEditorModel(theme: Theme.dark); model.name = "   "
+        #expect(model.buildPreviewTheme().name == "Custom")
     }
 
-    func testNameIsTrimed() {
-        let model = ThemeEditorModel(theme: Theme.dark)
-        model.name = "  My Theme  "
-        XCTAssertEqual(model.buildPreviewTheme().name, "My Theme")
+    @Test func nameIsTrimmed() {
+        let model = ThemeEditorModel(theme: Theme.dark); model.name = "  My Theme  "
+        #expect(model.buildPreviewTheme().name == "My Theme")
     }
 
-    func testNonEmptyNameIsPreserved() {
-        let model = ThemeEditorModel(theme: Theme.dark)
-        model.name = "Dracula"
-        XCTAssertEqual(model.buildPreviewTheme().name, "Dracula")
+    @Test func nonEmptyNameIsPreserved() {
+        let model = ThemeEditorModel(theme: Theme.dark); model.name = "Dracula"
+        #expect(model.buildPreviewTheme().name == "Dracula")
     }
 
     // MARK: - Font size parsing
 
-    func testValidFontSizeParsed() {
-        let model = ThemeEditorModel(theme: Theme.dark)
-        model.termFontSize = "16"
-        XCTAssertEqual(model.buildPreviewTheme().fontSize, 16)
+    @Test func validFontSizeParsed() {
+        let model = ThemeEditorModel(theme: Theme.dark); model.termFontSize = "16"
+        #expect(model.buildPreviewTheme().fontSize == 16)
     }
 
-    func testInvalidFontSizeFallsBackToDefault() {
-        let model = ThemeEditorModel(theme: Theme.dark)
-        model.termFontSize = "not-a-number"
-        // buildTheme falls back to 13 for terminal font
-        XCTAssertEqual(model.buildPreviewTheme().fontSize, 13)
+    @Test func invalidFontSizeFallsBackToDefault() {
+        let model = ThemeEditorModel(theme: Theme.dark); model.termFontSize = "not-a-number"
+        #expect(model.buildPreviewTheme().fontSize == 13)
     }
 
-    func testInvalidAnnotationFontSizeFallsBackToDefault() {
-        let model = ThemeEditorModel(theme: Theme.dark)
-        model.annotFontSize = "bad"
-        // buildTheme falls back to 148 for annotation font
-        XCTAssertEqual(model.buildPreviewTheme().annotationFontSize, 148)
+    @Test func invalidAnnotationFontSizeFallsBackToDefault() {
+        let model = ThemeEditorModel(theme: Theme.dark); model.annotFontSize = "bad"
+        #expect(model.buildPreviewTheme().annotationFontSize == 148)
     }
 
-    func testAnnotationFontSizeParsed() {
-        let model = ThemeEditorModel(theme: Theme.dark)
-        model.annotFontSize = "72"
-        XCTAssertEqual(model.buildPreviewTheme().annotationFontSize, 72)
+    @Test func annotationFontSizeParsed() {
+        let model = ThemeEditorModel(theme: Theme.dark); model.annotFontSize = "72"
+        #expect(model.buildPreviewTheme().annotationFontSize == 72)
     }
 
     // MARK: - populate(from:) updates sourceID
 
-    func testPopulateFromUpdatesSourceID() {
+    @Test func populateFromUpdatesSourceID() {
         let model = ThemeEditorModel(theme: Theme.dark)
-        XCTAssertEqual(model.buildPreviewTheme().id, Theme.dark.id)
-
         model.populate(from: Theme.solarizedDark)
-        XCTAssertEqual(model.buildPreviewTheme().id, Theme.solarizedDark.id)
+        #expect(model.buildPreviewTheme().id == Theme.solarizedDark.id)
     }
 
-    func testPopulateFromUpdatesName() {
+    @Test func populateFromUpdatesName() {
         let model = ThemeEditorModel(theme: Theme.dark)
         model.populate(from: Theme.gruvboxDark)
-        XCTAssertEqual(model.name, Theme.gruvboxDark.name)
+        #expect(model.name == Theme.gruvboxDark.name)
     }
 
     // MARK: - Color round-trip through model
 
-    func testCanvasBackgroundRoundTrip() {
+    @Test func canvasBackgroundRoundTrip() {
         let model = ThemeEditorModel(theme: Theme.dark)
-        let original = Theme.dark.canvasBackground
-        let built = model.buildPreviewTheme().canvasBackground
-        XCTAssertEqual(built.hex, original.hex)
+        #expect(model.buildPreviewTheme().canvasBackground.hex == Theme.dark.canvasBackground.hex)
     }
 
-    func testTerminalBackgroundRoundTrip() {
+    @Test func terminalBackgroundRoundTrip() {
         let model = ThemeEditorModel(theme: Theme.oneDark)
-        XCTAssertEqual(model.buildPreviewTheme().terminalBackground.hex,
-                       Theme.oneDark.terminalBackground.hex)
+        #expect(model.buildPreviewTheme().terminalBackground.hex == Theme.oneDark.terminalBackground.hex)
     }
 
-    func testAnsiColorsRoundTrip() {
-        let model = ThemeEditorModel(theme: Theme.dark)
-        let built = model.buildPreviewTheme()
-        XCTAssertEqual(built.ansi.count, 16)
+    @Test func ansiColorsRoundTrip() {
+        let built = ThemeEditorModel(theme: Theme.dark).buildPreviewTheme()
+        #expect(built.ansi.count == 16)
         for i in 0..<16 {
-            XCTAssertEqual(built.ansi[i].hex, Theme.dark.ansi[i].hex,
-                           "ANSI color \(i) should survive model round-trip")
+            #expect(built.ansi[i].hex == Theme.dark.ansi[i].hex,
+                    "ANSI color \(i) should survive model round-trip")
         }
     }
 
-    // MARK: - Auto-save integration (onApply)
+    // MARK: - onApply / onSave callbacks
 
-    func testOnApplyFiredWhenModelChanges() {
+    @Test func onApplyFiredWhenModelChanges() {
         let model = ThemeEditorModel(theme: Theme.dark)
-        var appliedCount = 0
-        model.onApply = { _ in appliedCount += 1 }
-
-        // Simulate what the SwiftUI view does on objectWillChange
+        var count = 0
+        model.onApply = { _ in count += 1 }
         model.name = "Changed"
         model.onApply?(model.buildPreviewTheme())
-        XCTAssertEqual(appliedCount, 1)
+        #expect(count == 1)
     }
 
-    func testOnApplyThemeHasCorrectID() {
+    @Test func onApplyThemeHasCorrectID() {
         let model = ThemeEditorModel(theme: Theme.solarizedDark)
         var receivedID: String?
         model.onApply = { receivedID = $0.id }
-
         model.onApply?(model.buildPreviewTheme())
-        XCTAssertEqual(receivedID, Theme.solarizedDark.id)
+        #expect(receivedID == Theme.solarizedDark.id)
     }
 
-    func testOnSaveThemeHasFreshID() {
+    @Test func onSaveThemeHasFreshID() {
         let model = ThemeEditorModel(theme: Theme.dark)
         var receivedID: String?
         model.onSave = { receivedID = $0.id }
-
         model.onSave?(model.buildNewTheme())
-        XCTAssertNotNil(receivedID)
-        XCTAssertNotEqual(receivedID, Theme.dark.id)
+        #expect(receivedID != nil)
+        #expect(receivedID != Theme.dark.id)
     }
 
     // MARK: - displayName helper
 
-    func testDisplayNameForEmptyFamilyMonospace() {
-        XCTAssertEqual(ThemeEditorModel.displayName(forFamily: "", isMonospace: true),
-                       "System Monospaced")
+    @Test func displayNameForEmptyFamilyMonospace() {
+        #expect(ThemeEditorModel.displayName(forFamily: "", isMonospace: true) == "System Monospaced")
     }
 
-    func testDisplayNameForEmptyFamilyNonMonospace() {
-        XCTAssertEqual(ThemeEditorModel.displayName(forFamily: "", isMonospace: false),
-                       "System Font")
+    @Test func displayNameForEmptyFamilyNonMonospace() {
+        #expect(ThemeEditorModel.displayName(forFamily: "", isMonospace: false) == "System Font")
     }
 
-    func testDisplayNameForNamedFamily() {
-        XCTAssertEqual(ThemeEditorModel.displayName(forFamily: "Helvetica", isMonospace: false),
-                       "Helvetica")
+    @Test func displayNameForNamedFamily() {
+        #expect(ThemeEditorModel.displayName(forFamily: "Helvetica", isMonospace: false) == "Helvetica")
     }
 }
