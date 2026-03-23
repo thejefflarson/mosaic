@@ -79,7 +79,11 @@ struct TerminalSettingsTests {
     }
 
     @Test func userDefaultsReturnsDefaultWhenKeyAbsent() {
-        // Remove any stored value and verify the default instance is returned.
+        let saved = UserDefaults.standard.data(forKey: "terminalSettings")
+        defer {
+            if let saved { UserDefaults.standard.set(saved, forKey: "terminalSettings") }
+            else { UserDefaults.standard.removeObject(forKey: "terminalSettings") }
+        }
         UserDefaults.standard.removeObject(forKey: "terminalSettings")
         let s = TerminalSettings.shared
         #expect(s.cursorStyle     == .blinkBlock)
