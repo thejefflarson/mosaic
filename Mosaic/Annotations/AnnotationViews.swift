@@ -549,21 +549,36 @@ final class FreehandAnnotationView: AnnotationView {
 
 final class ImageAnnotationView: AnnotationView {
     private let imageView = NSImageView()
-    /// Absolute path to the saved PNG in Application Support/Mosaic/Images/.
+    /// Absolute path to the image file in Application Support/Mosaic/Images/.
     private var savedImagePath: String?
     /// Width / height of the source image. Maintained during resize.
     let aspectRatio: CGFloat
 
-    init(at worldPt: CGPoint, image: NSImage) {
+    /// Preferred initializer when the source is a file URL — copies the original
+    /// file verbatim so SVG, HEIC, WebP, etc. are preserved without re-encoding.
+    init(at worldPt: CGPoint, url: URL) {
+        let image = NSImage(contentsOf: url) ?? NSImage()
         let s = image.size
         let ar = (s.width > 0 && s.height > 0) ? s.width / s.height : 1
-        // Scale down proportionally to fit within 400×300
         let scale = min(1, min(400 / max(1, s.width), 300 / max(1, s.height)))
         let size = CGSize(width: s.width * scale, height: s.height * scale)
         aspectRatio = ar
         super.init(frame: CGRect(origin: worldPt, size: size))
         setup(image: image)
-        savedImagePath = Self.persistImage(image, id: annotationID)
+        savedImagePath = Self.copyFile(url, id: annotationID)
+    }
+
+    /// Fallback initializer for cases where only a rendered NSImage is available
+    /// (e.g. paste). Encodes to PNG since there is no source file to copy.
+    init(at worldPt: CGPoint, image: NSImage) {
+        let s = image.size
+        let ar = (s.width > 0 && s.height > 0) ? s.width / s.height : 1
+        let scale = min(1, min(400 / max(1, s.width), 300 / max(1, s.height)))
+        let size = CGSize(width: s.width * scale, height: s.height * scale)
+        aspectRatio = ar
+        super.init(frame: CGRect(origin: worldPt, size: size))
+        setup(image: image)
+        savedImagePath = Self.persistAsPNG(image, id: annotationID)
     }
 
     override init(frame: NSRect) {
@@ -646,8 +661,17 @@ final class ImageAnnotationView: AnnotationView {
         onChanged?()
     }
 
-    /// Write image to disk as PNG; returns the file path or nil on failure.
-    private static func persistImage(_ image: NSImage, id: UUID) -> String? {
+    /// Copy the source file into the Images directory, preserving its extension.
+    private static func copyFile(_ source: URL, id: UUID) -> String? {
+        let ext = source.pathExtension.isEmpty ? "png" : source.pathExtension
+        let dest = WorkspaceStore.shared.imagesDirectory
+            .appendingPathComponent("\(id.uuidString).\(ext)")
+        try? FileManager.default.copyItem(at: source, to: dest)
+        return dest.path
+    }
+
+    /// Encode an NSImage to PNG and write it to the Images directory.
+    private static func persistAsPNG(_ image: NSImage, id: UUID) -> String? {
         let url = WorkspaceStore.shared.imagesDirectory
             .appendingPathComponent("\(id.uuidString).png")
         guard let tiff = image.tiffRepresentation,

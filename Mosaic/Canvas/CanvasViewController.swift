@@ -523,9 +523,8 @@ final class CanvasViewController: NSViewController {
         panel.allowedContentTypes = [.image]
         panel.allowsMultipleSelection = false
         panel.begin { [weak self] response in
-            guard let self, response == .OK, let url = panel.url,
-                  let image = NSImage(contentsOf: url) else { return }
-            let av = ImageAnnotationView(at: worldPt, image: image)
+            guard let self, response == .OK, let url = panel.url else { return }
+            let av = ImageAnnotationView(at: worldPt, url: url)
             addAnnotation(av)
         }
     }
