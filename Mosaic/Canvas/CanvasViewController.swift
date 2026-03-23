@@ -928,20 +928,6 @@ final class CanvasViewController: NSViewController {
             }
         }
 
-        /// Sort key for picking the "most directly in this direction" terminal.
-        /// Returns (perpendicular deviation, axial distance).
-        /// Candidates with smaller perpendicular deviation rank first; axial distance
-        /// breaks ties. Example: Cmd+Left uses (|Δy|, |Δx|) so a terminal that's
-        /// far left but on the same horizontal line beats one that's barely left
-        /// but 1000px above.
-        func nearestKey(for candidate: CGPoint, relativeTo origin: CGPoint) -> (CGFloat, CGFloat) {
-            let dx = abs(candidate.x - origin.x)
-            let dy = abs(candidate.y - origin.y)
-            switch self {
-            case .left, .right: return (dy, dx)
-            case .up, .down:    return (dx, dy)
-            }
-        }
     }
 
     private func focusNearest(_ direction: FocusDirection) {
@@ -953,9 +939,9 @@ final class CanvasViewController: NSViewController {
             $0 !== current && direction.contains($0.frame.center, relativeTo: origin)
         }
         guard let nearest = candidates.min(by: {
-            let ak = direction.nearestKey(for: $0.frame.center, relativeTo: origin)
-            let bk = direction.nearestKey(for: $1.frame.center, relativeTo: origin)
-            return ak == bk ? false : ak < bk
+            let da = hypot($0.frame.center.x - origin.x, $0.frame.center.y - origin.y)
+            let db = hypot($1.frame.center.x - origin.x, $1.frame.center.y - origin.y)
+            return da < db
         }) else { return }
         snapViewportToTerminal(nearest)
     }

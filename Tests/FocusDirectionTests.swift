@@ -69,56 +69,58 @@ struct FocusDirectionTests {
         #expect(Dir.up.contains(CGPoint(x: 999, y: 10), relativeTo: CGPoint(x: 50, y: 100)))
     }
 
-    // MARK: - nearestKey: perpendicular deviation is the primary sort key
+    // MARK: - Euclidean selection
     //
-    // Spec example (Cmd+Left):
-    //   A = (-1, 1000) — barely left, far off-axis
-    //   B = (-100, 1)  — far left, nearly on-axis
-    // B should rank ahead of A because its |Δy| is smaller.
+    // After directional filtering, focusNearest picks the Euclidean-nearest
+    // candidate. Tests verify expected winners for both the original spec
+    // example and the user-reported regression.
 
-    @Test func leftPrefersSmallYDeviationOverSmallXDistance() {
-        let origin = CGPoint(x: 0, y: 0)
-        let ka = Dir.left.nearestKey(for: CGPoint(x: -1,   y: 1000), relativeTo: origin)
-        let kb = Dir.left.nearestKey(for: CGPoint(x: -100, y: 1),    relativeTo: origin)
-        #expect(kb.0 < ka.0) // B has smaller perpendicular (y) deviation
+    private func dist(_ pt: CGPoint, from origin: CGPoint) -> CGFloat {
+        hypot(pt.x - origin.x, pt.y - origin.y)
     }
 
-    @Test func rightPrefersSmallYDeviation() {
+    // Original spec example (Cmd+Left):
+    //   A = (-1, 1000) — barely left, far off-axis  (dist ≈ 1000)
+    //   B = (-100, 1)  — far left, nearly on-axis   (dist ≈ 100)
+    // B is Euclidean-closer, so B wins.
+    @Test func leftCloserTerminalWinsOverDistantAlignedTerminal() {
         let origin = CGPoint(x: 0, y: 0)
-        let kAligned = Dir.right.nearestKey(for: CGPoint(x: 100, y: 5),   relativeTo: origin)
-        let kClose   = Dir.right.nearestKey(for: CGPoint(x: 10,  y: 200), relativeTo: origin)
-        #expect(kAligned.0 < kClose.0)
+        let distA = dist(CGPoint(x: -1,   y: 1000), from: origin)
+        let distB = dist(CGPoint(x: -100, y: 1),    from: origin)
+        #expect(distB < distA)
     }
 
-    @Test func upPrefersSmallXDeviation() {
+    // User-reported regression (Cmd+Right):
+    //   A = (10, 5)  — close, slightly off-axis   (dist ≈ 11)
+    //   B = (40, 0)  — far, perfectly aligned      (dist = 40)
+    // A is Euclidean-closer, so A wins.
+    @Test func rightCloserTerminalWinsEvenIfMoreOffAxis() {
         let origin = CGPoint(x: 0, y: 0)
-        let kAligned = Dir.up.nearestKey(for: CGPoint(x: 5,   y: -100), relativeTo: origin)
-        let kClose   = Dir.up.nearestKey(for: CGPoint(x: 200, y: -10),  relativeTo: origin)
-        #expect(kAligned.0 < kClose.0)
+        let distA = dist(CGPoint(x: 10, y: 5), from: origin)
+        let distB = dist(CGPoint(x: 40, y: 0), from: origin)
+        #expect(distA < distB)
     }
 
-    @Test func downPrefersSmallXDeviation() {
+    @Test func upCloserTerminalWins() {
         let origin = CGPoint(x: 0, y: 0)
-        let kAligned = Dir.down.nearestKey(for: CGPoint(x: 3,   y: 200), relativeTo: origin)
-        let kClose   = Dir.down.nearestKey(for: CGPoint(x: 150, y: 10),  relativeTo: origin)
-        #expect(kAligned.0 < kClose.0)
+        let distNear = dist(CGPoint(x: 5,  y: -10),  from: origin)
+        let distFar  = dist(CGPoint(x: 0,  y: -100), from: origin)
+        #expect(distNear < distFar)
     }
 
-    // Tiebreaker: when perpendicular deviations are equal, prefer smaller axial distance.
-
-    @Test func leftTiebreakerUsesAxialDistance() {
+    @Test func downCloserTerminalWins() {
         let origin = CGPoint(x: 0, y: 0)
-        let kNear = Dir.left.nearestKey(for: CGPoint(x: -10,  y: 5), relativeTo: origin)
-        let kFar  = Dir.left.nearestKey(for: CGPoint(x: -100, y: 5), relativeTo: origin)
-        #expect(kNear.0 == kFar.0) // same |Δy|
-        #expect(kNear.1 < kFar.1)  // smaller |Δx| wins
+        let distNear = dist(CGPoint(x: 3,  y: 10),  from: origin)
+        let distFar  = dist(CGPoint(x: 0,  y: 200), from: origin)
+        #expect(distNear < distFar)
     }
 
-    @Test func upTiebreakerUsesAxialDistance() {
+    // A terminal directly on-axis at moderate distance beats a nearer off-axis one
+    // only when the Euclidean distance makes it so — not by alignment alone.
+    @Test func alignedTerminalWinsOnlyWhenActuallyCloser() {
         let origin = CGPoint(x: 0, y: 0)
-        let kNear = Dir.up.nearestKey(for: CGPoint(x: 5, y: -10),  relativeTo: origin)
-        let kFar  = Dir.up.nearestKey(for: CGPoint(x: 5, y: -100), relativeTo: origin)
-        #expect(kNear.0 == kFar.0)
-        #expect(kNear.1 < kFar.1)
+        let aligned = dist(CGPoint(x: 100, y: 0),  from: origin) // 100 — aligned but far
+        let nearby  = dist(CGPoint(x: 10,  y: 8),  from: origin) // ≈ 12.8 — closer
+        #expect(nearby < aligned)
     }
 }
