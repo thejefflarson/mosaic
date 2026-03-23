@@ -13,8 +13,8 @@ struct Theme {
     var fontSize: CGFloat = 13
     /// Color used for text annotations, arrows, and freehand strokes.
     var annotationColor: NSColor = .white
-    /// Font for text annotations. Empty string = system font.
-    var annotationFontName: String = ""
+    /// Font for text annotations.
+    var annotationFontName: String = "HoeflerText-Regular"
     var annotationFontSize: CGFloat = 148
     /// Sticky note text color.
     var stickyForeground: NSColor = c(0x1a1a1a)
@@ -29,8 +29,9 @@ struct Theme {
 
     var annotationFont: NSFont {
         let size = annotationFontSize
-        if annotationFontName.isEmpty { return NSFont.systemFont(ofSize: size, weight: .regular) }
-        return NSFont(name: annotationFontName, size: size) ?? NSFont.systemFont(ofSize: size, weight: .regular)
+        return NSFont(name: annotationFontName, size: size)
+            ?? NSFont(name: "HoeflerText-Regular", size: size)
+            ?? NSFont.systemFont(ofSize: size, weight: .regular)
     }
 
     static let monospaceFonts: [(name: String, postScript: String)] = [
@@ -42,6 +43,7 @@ struct Theme {
     ]
 
     static let annotationFonts: [(name: String, postScript: String)] = [
+        ("Hoefler Text",          "HoeflerText-Regular"),
         ("System (SF Pro)",       ""),
         ("Helvetica Neue",        "HelveticaNeue"),
         ("Helvetica Neue Bold",   "HelveticaNeue-Bold"),

@@ -56,8 +56,11 @@ struct ThemeTests {
         #expect(theme.terminalFont.pointSize == 14)
     }
 
-    @Test func annotationFontFallbackToSystem() {
+    @Test func annotationFontFallbackToHoeflerThenSystem() {
+        // Empty name falls back to Hoefler Text; unresolvable name falls back to system.
         var theme = Theme.dark; theme.annotationFontName = ""; theme.annotationFontSize = 72
+        #expect(theme.annotationFont.pointSize == 72)
+        theme.annotationFontName = "NonExistentFont-XYZ"
         #expect(theme.annotationFont.pointSize == 72)
     }
 
