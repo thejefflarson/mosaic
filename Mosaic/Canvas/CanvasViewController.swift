@@ -523,8 +523,15 @@ final class CanvasViewController: NSViewController {
         panel.allowedContentTypes = [.image]
         panel.allowsMultipleSelection = false
         panel.begin { [weak self] response in
-            guard let self, response == .OK, let url = panel.url,
-                  let av = ImageAnnotationView(at: worldPt, url: url) else { return }
+            guard let self, response == .OK, let url = panel.url else { return }
+            guard let av = ImageAnnotationView(at: worldPt, url: url) else {
+                let alert = NSAlert()
+                alert.messageText = "Couldn't open image"
+                alert.informativeText = "\(url.lastPathComponent) could not be read as an image."
+                alert.alertStyle = .warning
+                alert.runModal()
+                return
+            }
             addAnnotation(av)
         }
     }
