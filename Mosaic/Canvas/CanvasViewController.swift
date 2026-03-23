@@ -920,11 +920,13 @@ final class CanvasViewController: NSViewController {
         case left, right, up, down
 
         func contains(_ candidate: CGPoint, relativeTo origin: CGPoint) -> Bool {
+            let dx = candidate.x - origin.x
+            let dy = candidate.y - origin.y
             switch self {
-            case .left:  return candidate.x < origin.x
-            case .right: return candidate.x > origin.x
-            case .up:    return candidate.y < origin.y
-            case .down:  return candidate.y > origin.y
+            case .left:  return dx < 0 && abs(dy) < abs(dx)
+            case .right: return dx > 0 && abs(dy) < abs(dx)
+            case .up:    return dy < 0 && abs(dx) < abs(dy)
+            case .down:  return dy > 0 && abs(dx) < abs(dy)
             }
         }
 

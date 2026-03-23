@@ -58,15 +58,43 @@ struct FocusDirectionTests {
         #expect(!Dir.down.contains(CGPoint(x: 50, y: 100), relativeTo: CGPoint(x: 50, y: 100)))
     }
 
-    // MARK: - Off-axis position doesn't affect containment
+    // MARK: - 90° cone: within ±45° of axis is accepted; outside is rejected
 
-    @Test func leftAcceptsDiagonallyLeft() {
-        // Candidate is to the left and far above — still qualifies for left
-        #expect(Dir.left.contains(CGPoint(x: 10, y: 999), relativeTo: CGPoint(x: 100, y: 50)))
+    @Test func leftAcceptsWithin45Degrees() {
+        // 30° above horizontal-left — inside the 90° left cone
+        #expect(Dir.left.contains(CGPoint(x: 50, y: 80), relativeTo: CGPoint(x: 100, y: 50)))
     }
 
-    @Test func upAcceptsDiagonallyAbove() {
-        #expect(Dir.up.contains(CGPoint(x: 999, y: 10), relativeTo: CGPoint(x: 50, y: 100)))
+    @Test func leftRejectsMoreThan45DegreesOff() {
+        // Candidate is mostly above and slightly left — outside left cone
+        #expect(!Dir.left.contains(CGPoint(x: 90, y: 0), relativeTo: CGPoint(x: 100, y: 50)))
+    }
+
+    @Test func rightRejectsMoreThan45DegreesOff() {
+        // Candidate is mostly below and slightly right — outside right cone
+        #expect(!Dir.right.contains(CGPoint(x: 110, y: 200), relativeTo: CGPoint(x: 100, y: 50)))
+    }
+
+    @Test func upAcceptsWithin45Degrees() {
+        // Candidate is mostly above with small horizontal offset — inside up cone
+        #expect(Dir.up.contains(CGPoint(x: 60, y: 10), relativeTo: CGPoint(x: 50, y: 100)))
+    }
+
+    @Test func upRejectsMostlyHorizontal() {
+        // Candidate is far to the right and slightly above — outside up cone
+        #expect(!Dir.up.contains(CGPoint(x: 999, y: 90), relativeTo: CGPoint(x: 50, y: 100)))
+    }
+
+    @Test func downRejectsMostlyHorizontal() {
+        #expect(!Dir.down.contains(CGPoint(x: 999, y: 110), relativeTo: CGPoint(x: 50, y: 100)))
+    }
+
+    // A terminal at exactly 45° (|dx| == |dy|) is not claimed by any direction.
+    @Test func exactlyAt45DegreesIsInNoQuadrant() {
+        let origin = CGPoint(x: 0, y: 0)
+        let diagonal = CGPoint(x: 10, y: -10) // exactly 45° up-right
+        #expect(!Dir.right.contains(diagonal, relativeTo: origin))
+        #expect(!Dir.up.contains(diagonal, relativeTo: origin))
     }
 
     // MARK: - Euclidean selection
