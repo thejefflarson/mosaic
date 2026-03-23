@@ -74,7 +74,7 @@ final class CanvasViewController: NSViewController {
     private var broadcastMode = false
     private var saveDebounceTimer: Timer?
     private var workspaceRestored = false
-    private var currentTheme: Theme = {
+    var currentTheme: Theme = {
         let id = UserDefaults.standard.string(forKey: "themeID") ?? Theme.dark.id
         return Theme.allThemes.first { $0.id == id } ?? .dark
     }()
@@ -805,7 +805,7 @@ final class CanvasViewController: NSViewController {
         canvasView.setViewport(vp)
     }
 
-    private func restoreAnnotation(_ s: AnnotationSnapshot) {
+    func restoreAnnotation(_ s: AnnotationSnapshot) {
         let frame = CGRect(x: s.x, y: s.y, width: s.width, height: s.height)
         switch s.kind {
         case .text:

@@ -1,5 +1,5 @@
 import Testing
-import Foundation
+import AppKit
 @testable import Mosaic
 
 /// Tests for the AppleScript backing methods.
