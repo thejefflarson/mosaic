@@ -124,7 +124,8 @@ xcrun stapler staple "$DMG"
 
 # ── Tag & publish ─────────────────────────────────────────────────────────────
 
-echo "→ tagging $VERSION"
+echo "→ pushing main and tagging $VERSION"
+git push origin main
 git tag "$VERSION"
 git push origin "$VERSION"
 
