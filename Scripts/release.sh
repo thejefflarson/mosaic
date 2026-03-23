@@ -12,8 +12,7 @@
 #
 # Optional environment variables:
 #   NOTARYTOOL_PROFILE   keychain profile name (default: MosaicNotarization)
-#   DEVELOPMENT_TEAM     10-char Apple team ID; only needed if you have multiple
-#                        Developer ID Application certs in your keychain
+#   DEVELOPMENT_TEAM     10-char Apple team ID (default: 2PR729W8E3)
 
 set -euo pipefail
 
@@ -21,6 +20,7 @@ VERSION="${1:?Usage: $0 <version tag>  e.g. $0 v0.2.0}"
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_DIR="$(mktemp -d)"
 NOTARYTOOL_PROFILE="${NOTARYTOOL_PROFILE:-MosaicNotarization}"
+DEVELOPMENT_TEAM="${DEVELOPMENT_TEAM:-2PR729W8E3}"
 APP_NAME="Mosaic"
 ARCHIVE="$BUILD_DIR/$APP_NAME.xcarchive"
 EXPORT_DIR="$BUILD_DIR/export"
