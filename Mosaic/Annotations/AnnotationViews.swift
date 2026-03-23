@@ -556,8 +556,9 @@ final class ImageAnnotationView: AnnotationView {
 
     /// Preferred initializer when the source is a file URL — copies the original
     /// file verbatim so SVG, HEIC, WebP, etc. are preserved without re-encoding.
-    init(at worldPt: CGPoint, url: URL) {
-        let image = NSImage(contentsOf: url) ?? NSImage()
+    /// Returns nil if the URL cannot be decoded as an image.
+    init?(at worldPt: CGPoint, url: URL) {
+        guard let image = NSImage(contentsOf: url), image.isValid else { return nil }
         let s = image.size
         let ar = (s.width > 0 && s.height > 0) ? s.width / s.height : 1
         let scale = min(1, min(400 / max(1, s.width), 300 / max(1, s.height)))
