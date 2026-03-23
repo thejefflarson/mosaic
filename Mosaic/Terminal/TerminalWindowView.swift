@@ -1,5 +1,5 @@
 import AppKit
-import SwiftTerm
+@preconcurrency import SwiftTerm
 
 /// Thin subclass that intercepts outgoing key data for broadcast mode
 /// while still calling super to let the PTY receive input normally.
@@ -225,6 +225,9 @@ final class TerminalWindowView: NSView {
 
         // Run forkpty on a background thread so the ~2 s atfork-handler cost
         // (libBacktraceRecording) doesn't block the main thread and cause a beachball.
+        // SwiftTerm annotates startProcess as @MainActor but the underlying forkpty
+        // call is thread-safe; the annotation is overly conservative. Calling from a
+        // background thread here is intentional and safe.
         DispatchQueue.global(qos: .userInitiated).async { [termView] in
             termView!.startProcess(
                 executable: shellPath,
