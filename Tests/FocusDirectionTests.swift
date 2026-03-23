@@ -97,10 +97,24 @@ struct FocusDirectionTests {
         #expect(!Dir.up.contains(diagonal, relativeTo: origin))
     }
 
-    @Test func exactlyAt45DegreesIsInLeftQuadrant() {
+    @Test func exactlyAt45DegreesIsInLeftQuadrantUpperLeft() {
+        let origin = CGPoint(x: 0, y: 0)
+        let diagonal = CGPoint(x: -10, y: -10) // exactly 45° up-left
+        #expect(Dir.left.contains(diagonal, relativeTo: origin))
+        #expect(!Dir.up.contains(diagonal, relativeTo: origin))
+    }
+
+    @Test func exactlyAt45DegreesIsInLeftQuadrantLowerLeft() {
         let origin = CGPoint(x: 0, y: 0)
         let diagonal = CGPoint(x: -10, y: 10) // exactly 45° down-left
         #expect(Dir.left.contains(diagonal, relativeTo: origin))
+        #expect(!Dir.down.contains(diagonal, relativeTo: origin))
+    }
+
+    @Test func exactlyAt45DegreesIsInRightQuadrantLowerRight() {
+        let origin = CGPoint(x: 0, y: 0)
+        let diagonal = CGPoint(x: 10, y: 10) // exactly 45° down-right
+        #expect(Dir.right.contains(diagonal, relativeTo: origin))
         #expect(!Dir.down.contains(diagonal, relativeTo: origin))
     }
 
