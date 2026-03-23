@@ -89,12 +89,19 @@ struct FocusDirectionTests {
         #expect(!Dir.down.contains(CGPoint(x: 999, y: 110), relativeTo: CGPoint(x: 50, y: 100)))
     }
 
-    // A terminal at exactly 45° (|dx| == |dy|) is not claimed by any direction.
-    @Test func exactlyAt45DegreesIsInNoQuadrant() {
+    // A terminal at exactly 45° belongs to a horizontal quadrant (left/right claim the diagonals).
+    @Test func exactlyAt45DegreesIsInRightQuadrant() {
         let origin = CGPoint(x: 0, y: 0)
         let diagonal = CGPoint(x: 10, y: -10) // exactly 45° up-right
-        #expect(!Dir.right.contains(diagonal, relativeTo: origin))
+        #expect(Dir.right.contains(diagonal, relativeTo: origin))
         #expect(!Dir.up.contains(diagonal, relativeTo: origin))
+    }
+
+    @Test func exactlyAt45DegreesIsInLeftQuadrant() {
+        let origin = CGPoint(x: 0, y: 0)
+        let diagonal = CGPoint(x: -10, y: 10) // exactly 45° down-left
+        #expect(Dir.left.contains(diagonal, relativeTo: origin))
+        #expect(!Dir.down.contains(diagonal, relativeTo: origin))
     }
 
     // MARK: - Euclidean selection

@@ -923,8 +923,8 @@ final class CanvasViewController: NSViewController {
             let dx = candidate.x - origin.x
             let dy = candidate.y - origin.y
             switch self {
-            case .left:  return dx < 0 && abs(dy) < abs(dx)
-            case .right: return dx > 0 && abs(dy) < abs(dx)
+            case .left:  return dx < 0 && abs(dy) <= abs(dx)
+            case .right: return dx > 0 && abs(dy) <= abs(dx)
             case .up:    return dy < 0 && abs(dx) < abs(dy)
             case .down:  return dy > 0 && abs(dx) < abs(dy)
             }
