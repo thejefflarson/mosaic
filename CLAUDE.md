@@ -56,10 +56,26 @@ SwiftTerm via SPM: `https://github.com/migueldeicaza/SwiftTerm.git` (branch: mai
 
 ## Workspace persistence
 
-Saves to `~/Library/Application Support/CanvasTerm/workspace.json` on a 5-second debounce after any change. Restores layout and working directories on launch. Terminal session content is not persisted (PTYs are always fresh).
+Saves to `~/Library/Application Support/Mosaic/workspace.json` on a 5-second debounce after any change. Restores layout and working directories on launch. Terminal session content is not persisted (PTYs are always fresh).
+
+## Release
+
+```bash
+./Scripts/release.sh v0.3.0
+```
+
+Builds a signed + notarized DMG, pushes the git tag, and creates a GitHub release.
+Apple Developer team ID `2PR729W8E3` is hardcoded as the default. Notarytool credentials
+must be stored in the login keychain under the profile name `MosaicNotarization`:
+
+```bash
+xcrun notarytool store-credentials "MosaicNotarization" \
+  --apple-id "you@example.com" \
+  --team-id "2PR729W8E3" \
+  --password "xxxx-xxxx-xxxx-xxxx"   # app-specific password from appleid.apple.com
+```
 
 ## Planned features (not yet implemented)
 
-- Canvas annotations (sticky notes, group boxes)
 - Minimap click/drag accuracy improvements
 - Resize handle cursors (currently crosshair for corners)

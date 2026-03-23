@@ -61,9 +61,32 @@ xcodebuild test -scheme MosaicTests -destination 'platform=macOS'
 | `Cmd+0` | Reset zoom to 100% |
 | `Cmd+F` | Fit all terminals in view |
 | `Cmd+Shift+B` | Toggle broadcast mode |
+| `Cmd+Arrow` | Focus nearest terminal in that direction |
 | Double-click canvas | Spawn terminal at cursor |
 | Right-click annotation | Delete |
 | `Cmd`+scroll | Force pan (overrides terminal scroll) |
+
+## AppleScript
+
+Mosaic is scriptable. You can focus terminals by directory, open new ones, and query basic state:
+
+```applescript
+-- Focus the terminal whose working directory is ~/dev/myproject
+focus terminal "/Users/you/dev/myproject" of application "Mosaic"
+
+-- Open a new terminal at a specific path
+open terminal at "/tmp" of application "Mosaic"
+
+-- Read the active terminal's working directory
+tell application "Mosaic"
+    get working directory
+end tell
+
+-- Count open terminals
+tell application "Mosaic"
+    get terminal count
+end tell
+```
 
 ## Architecture
 
@@ -108,7 +131,7 @@ Docs/ADR/             # Architecture Decision Records
 ## Persistence
 
 - **Workspace** auto-saves to `~/Library/Application Support/Mosaic/workspace.json` on a 5-second debounce; flushed synchronously on quit.
-- **Terminal scrollback** (up to 300 lines) is saved as plain text and restored dim/italic on next launch.
+- **Terminal scrollback** (up to 500 lines by default) is saved as plain text and restored dim/italic on next launch.
 - **Image annotations** are saved as PNGs in `~/Library/Application Support/Mosaic/Images/`.
 - Terminal PTY processes are always fresh on launch — only the working directory is restored.
 
