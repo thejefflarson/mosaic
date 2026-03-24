@@ -57,12 +57,18 @@ struct ScriptingTests {
     // When accessed without a live app delegate, they return safe defaults.
 
     @Test @MainActor func workingDirectoryFallsBackToEmptyString() {
-        // NSApp.delegate is nil in the test runner → workingDirectory should be ""
-        // rather than crashing.
+        // Explicitly nil the delegate so the fallback path is taken regardless
+        // of whether the test host has initialised an AppDelegate.
+        let saved = NSApp.delegate
+        defer { NSApp.delegate = saved }
+        NSApp.delegate = nil
         #expect(NSApp.workingDirectory == "")
     }
 
     @Test @MainActor func terminalCountFallsBackToZero() {
+        let saved = NSApp.delegate
+        defer { NSApp.delegate = saved }
+        NSApp.delegate = nil
         #expect(NSApp.terminalCount == 0)
     }
 }
