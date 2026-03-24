@@ -66,6 +66,29 @@ struct UtilityTests {
         #expect(rect.minX == 70)
         #expect(rect.minY == 180)
     }
+    // MARK: - NSColor.isPerceivedDark
+
+    @Test func blackIsPerceivedDark()  { #expect(NSColor.black.isPerceivedDark  == true)  }
+    @Test func whiteIsNotPerceivedDark() { #expect(NSColor.white.isPerceivedDark == false) }
+
+    @Test func darkGrayIsPerceivedDark() {
+        #expect(NSColor(white: 0.25, alpha: 1).isPerceivedDark == true)
+    }
+    @Test func lightGrayIsNotPerceivedDark() {
+        #expect(NSColor(white: 0.75, alpha: 1).isPerceivedDark == false)
+    }
+    @Test func midGrayBoundary() {
+        // Luminance exactly 0.5 → not dark (strict <)
+        #expect(NSColor(white: 0.5, alpha: 1).isPerceivedDark == false)
+    }
+    @Test func darkBlueIsPerceivedDark() {
+        // Navy-ish: low luminance despite blue channel
+        #expect(NSColor(red: 0, green: 0, blue: 0.5, alpha: 1).isPerceivedDark == true)
+    }
+    @Test func yellowIsNotPerceivedDark() {
+        // Yellow: R+G contribute ~93% of luminance
+        #expect(NSColor(red: 1, green: 1, blue: 0, alpha: 1).isPerceivedDark == false)
+    }
 }
 
 private extension Int {

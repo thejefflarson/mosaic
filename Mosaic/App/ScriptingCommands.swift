@@ -1,9 +1,9 @@
 import AppKit
 
-// MARK: - focus terminal "/path"
+// MARK: - navigate to "/path"
 //
 //   tell application "Mosaic"
-//       focus terminal "/Users/jeff/myproject"
+//       navigate to "/Users/jeff/myproject"
 //   end tell
 //
 // Pans the canvas to the first terminal whose cwd matches and makes it active.
@@ -14,7 +14,7 @@ final class FocusTerminalCommand: NSScriptCommand {
     override func performDefaultImplementation() -> Any? {
         guard let path = directParameter as? String else {
             scriptErrorNumber = NSRequiredArgumentsMissingScriptError
-            scriptErrorString = "A directory path is required."
+            scriptErrorString = "A directory path is required (e.g.: navigate to \"/path\")."
             return false
         }
         let expanded = (path as NSString).expandingTildeInPath
@@ -26,10 +26,10 @@ final class FocusTerminalCommand: NSScriptCommand {
     }
 }
 
-// MARK: - open terminal at "/path"
+// MARK: - spawn at "/path"
 //
 //   tell application "Mosaic"
-//       open terminal at "/Users/jeff/myproject"
+//       spawn at "/Users/jeff/myproject"
 //   end tell
 
 @objc(OpenTerminalCommand)

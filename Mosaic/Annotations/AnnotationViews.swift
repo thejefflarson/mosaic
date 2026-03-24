@@ -10,6 +10,10 @@ class AnnotationView: NSView {
     var onChanged: (() -> Void)?
     /// Fired after a completed drag; carries (fromFrame, toFrame).
     var onDragEnded: ((CGRect, CGRect) -> Void)?
+    /// Fired each drag tick with the world-space delta; used for group-move.
+    var onDragDelta: ((CGFloat, CGFloat) -> Void)?
+    /// Fired on the first real drag tick (past threshold); used for group-move undo capture.
+    var onDragBegan: (() -> Void)?
 
     var snapFrame: ((CGRect, ResizeHandleView.Edge?) -> CGRect)?
     var clearSnapGuides: (() -> Void)?
@@ -71,6 +75,7 @@ class AnnotationView: NSView {
         guard didDrag || screenDist >= AnnotationView.dragThreshold else { return }
         if !didDrag {
             didDrag = true
+            onDragBegan?()
         }
         let zoom = canvasView?.currentZoom ?? 1
         let totalDX =  (loc.x - start.x) / zoom
@@ -84,6 +89,7 @@ class AnnotationView: NSView {
         let incrDY = snapped.origin.y - frame.origin.y
         frame.origin = snapped.origin
         didMoveByDelta(dx: incrDX, dy: incrDY)
+        onDragDelta?(incrDX, incrDY)
         onChanged?()
     }
 
@@ -122,6 +128,12 @@ class AnnotationView: NSView {
             }
         }
     }
+
+    // MARK: - Theme
+
+    /// Apply the current theme to this annotation. Subclasses override to update
+    /// their own appearance properties; the base does nothing.
+    func applyTheme(_ theme: Theme) {}
 
     // MARK: - Snapshot support
 
@@ -214,6 +226,11 @@ final class TextAnnotationView: AnnotationView, NSTextFieldDelegate {
             beginEditing()
         }
         pendingEditOnUp = false
+    }
+
+    override func applyTheme(_ theme: Theme) {
+        textColor = theme.annotationColor
+        annotationFont = theme.annotationFont
     }
 
     override func toSnapshot() -> AnnotationSnapshot? {
@@ -370,6 +387,11 @@ final class StickyNoteView: AnnotationView {
         window?.makeFirstResponder(textView)
     }
 
+    override func applyTheme(_ theme: Theme) {
+        themeForeground = theme.stickyForeground
+        themeBackground = theme.stickyBackground
+    }
+
     override func toSnapshot() -> AnnotationSnapshot? {
         AnnotationSnapshot(
             id: annotationID,
@@ -442,6 +464,10 @@ final class ArrowAnnotationView: AnnotationView {
     override func didMoveByDelta(dx: CGFloat, dy: CGFloat) {
         worldStart.x += dx; worldStart.y += dy
         worldEnd.x   += dx; worldEnd.y   += dy
+    }
+
+    override func applyTheme(_ theme: Theme) {
+        strokeColor = theme.annotationColor
     }
 
     override func toSnapshot() -> AnnotationSnapshot? {
@@ -531,6 +557,10 @@ final class FreehandAnnotationView: AnnotationView {
     override func didMoveByDelta(dx: CGFloat, dy: CGFloat) {
         // localPoints are relative to frame.origin, so moving the frame is sufficient.
         // No update needed — draw() always offsets by frame.origin.
+    }
+
+    override func applyTheme(_ theme: Theme) {
+        strokeColor = theme.annotationColor
     }
 
     override func toSnapshot() -> AnnotationSnapshot? {

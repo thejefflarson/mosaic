@@ -4,7 +4,7 @@ import CoreGraphics
 
 struct FocusDirectionTests {
 
-    typealias Dir = CanvasViewController.FocusDirection
+    typealias Dir = TerminalController.FocusDirection
 
     // MARK: - Containment
 

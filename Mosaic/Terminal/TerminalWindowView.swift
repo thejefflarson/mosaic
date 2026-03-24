@@ -50,6 +50,10 @@ final class TerminalWindowView: NSView {
     var clearSnapGuides: (() -> Void)?
     /// Raw input bytes to broadcast (only fired if broadcast mode is active upstream).
     var onBroadcastKey: ((Data) -> Void)?
+    /// Fired each drag tick with the world-space delta; used for group-move.
+    var onDragDelta: ((CGFloat, CGFloat) -> Void)?
+    /// Fired when a title-bar drag gesture begins; used for group-move undo capture.
+    var onDragBegan: (() -> Void)?
 
     /// Active theme — applied 0.8 s after process start (after shell init sequences).
     var theme: Theme = .dark
@@ -84,12 +88,15 @@ final class TerminalWindowView: NSView {
     // MARK: - Focus state
 
     var isActive: Bool = false {
-        didSet {
-            layer?.borderColor = isActive
-                ? NSColor(white: 0.75, alpha: 1).cgColor
-                : NSColor(white: 0.25, alpha: 1).cgColor
-            layer?.borderWidth = isActive ? 2 : 1
-        }
+        didSet { updateBorder() }
+    }
+
+    private func updateBorder() {
+        let dark = theme.terminalBackground.isPerceivedDark
+        layer?.borderColor = isActive
+            ? (dark ? NSColor(white: 0.75, alpha: 1) : NSColor(white: 0.2, alpha: 1)).cgColor
+            : (dark ? NSColor(white: 0.25, alpha: 1) : NSColor(white: 0.72, alpha: 1)).cgColor
+        layer?.borderWidth = isActive ? 2 : 1
     }
 
     private func setup() {
@@ -122,6 +129,7 @@ final class TerminalWindowView: NSView {
         titleBar.onDragBegan = { [weak self] in
             guard let self else { return }
             frameBeforeDrag = frame
+            onDragBegan?()
         }
 
         titleBar.onDrag = { [weak self] screenDX, screenDY in
@@ -131,6 +139,7 @@ final class TerminalWindowView: NSView {
                                   y: self.frame.origin.y - screenDY / zoom,
                                   width: self.frame.width, height: self.frame.height)
             self.frame = self.snapFrame?(proposed, nil) ?? proposed
+            self.onDragDelta?(screenDX / zoom, -screenDY / zoom)
             self.onMoved?()
         }
 
@@ -314,6 +323,7 @@ final class TerminalWindowView: NSView {
         termView.feed(text: theme.oscSequences)
         layer?.backgroundColor = theme.terminalBackground.cgColor
         titleBar.applyTheme(background: theme.terminalBackground, foreground: theme.terminalForeground)
+        updateBorder()
     }
 
     private func syncTitleBarColor() {
@@ -465,4 +475,5 @@ extension TerminalWindowView: LocalProcessTerminalViewDelegate {
         }
     }
 }
+
 

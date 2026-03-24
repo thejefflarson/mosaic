@@ -233,20 +233,29 @@ struct ThemeEditorView: View {
 
     @ViewBuilder
     private func ansiGrid() -> some View {
+        let rows: [(label: String, range: Range<Int>)] = [
+            ("Normal", 0..<8),
+            ("Bright", 8..<16),
+        ]
         VStack(alignment: .leading, spacing: 6) {
-            ForEach([0..<8, 8..<16], id: \.lowerBound) { range in
-                HStack(spacing: 0) {
-                    ForEach(range, id: \.self) { i in
+            ForEach(rows, id: \.label) { row in
+                HStack(alignment: .top, spacing: 4) {
+                    Text(row.label)
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 36, alignment: .trailing)
+                        .padding(.top, 5)
+                    ForEach(row.range, id: \.self) { i in
                         VStack(spacing: 3) {
                             ColorPicker("", selection: $model.ansi[i], supportsOpacity: false)
                                 .labelsHidden()
-                                .frame(width: 28, height: 24)
+                                .frame(width: 36, height: 24)
                             Text(ansiNames[i].components(separatedBy: " ").last ?? "")
                                 .font(.system(size: 8))
                                 .foregroundStyle(.secondary)
-                                .frame(width: 44)
+                                .frame(width: 36)
                         }
-                        .frame(width: 44)
+                        .frame(width: 36)
                     }
                 }
             }

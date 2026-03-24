@@ -51,8 +51,8 @@ struct ScriptingTests {
         #expect(pathMatches("~/Documents", against: "\(home)/Documents"))
     }
 
-    // MARK: - Application property defaults
 
+<<<<<<< HEAD
     // workingDirectory and terminalCount are backed by CanvasViewController.
     // When accessed without a live app delegate, they return safe defaults.
 
@@ -71,4 +71,6 @@ struct ScriptingTests {
         NSApp.delegate = nil
         #expect(NSApp.terminalCount == 0)
     }
+=======
+>>>>>>> 2cf846d (v0.3.0: canvas interaction model, group select/move, AppleScript fix)
 }

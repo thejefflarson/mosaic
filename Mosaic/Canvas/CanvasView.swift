@@ -21,6 +21,15 @@ final class CanvasView: NSView {
     /// Called when user double-clicks on the canvas background.
     var onBackgroundDoubleClick: ((CGPoint) -> Void)?
 
+    /// Called on any single click on the canvas background (before double-click check).
+    var onBackgroundClick: ((CGPoint) -> Void)?
+
+    /// Called when a terminal is pressed; second arg is whether Shift was held.
+    var onTerminalPressed: ((TerminalWindowView, Bool) -> Void)?
+
+    /// Called when an annotation is pressed; second arg is whether Shift was held.
+    var onAnnotationPressed: ((AnnotationView, Bool) -> Void)?
+
     /// All TerminalWindowViews and AnnotationViews are children of this view (world space).
     let worldView = FlippedView()
 
@@ -47,8 +56,38 @@ final class CanvasView: NSView {
         return l
     }()
 
+    // MARK: - Multi-selection rings
+
+    private let selectionRingsLayer: CAShapeLayer = {
+        let l = CAShapeLayer()
+        l.fillColor   = nil
+        l.strokeColor = NSColor(white: 0.65, alpha: 0.85).cgColor
+        l.lineWidth   = 2
+        l.lineDashPattern = [5, 3]
+        l.isHidden = true
+        return l
+    }()
+
+    func updateSelectionRings(_ frames: [CGRect]) {
+        if frames.isEmpty {
+            selectionRingsLayer.isHidden = true
+            selectionRingsLayer.path = nil
+            return
+        }
+        let path = CGMutablePath()
+        for frame in frames {
+            let outset = frame.insetBy(dx: -4, dy: -4)
+            path.addRoundedRect(in: outset, cornerWidth: 12, cornerHeight: 12)
+        }
+        worldView.layer?.addSublayer(selectionRingsLayer)  // re-raise above terminal layers
+        selectionRingsLayer.path = path
+        selectionRingsLayer.lineWidth = 2 / viewport.zoom
+        selectionRingsLayer.isHidden = false
+    }
+
     func setSelectionRect(_ rect: CGRect?) {
         if let rect {
+            worldView.layer?.addSublayer(selectionLayer)  // re-raise above terminal layers
             selectionLayer.isHidden = false
             selectionLayer.path = CGPath(rect: rect, transform: nil)
             selectionLayer.lineWidth = 1.5 / viewport.zoom
@@ -81,6 +120,7 @@ final class CanvasView: NSView {
         addSubview(worldView)
 
         worldView.layer?.addSublayer(selectionLayer)
+        worldView.layer?.addSublayer(selectionRingsLayer)
         setupGestureRecognizers()
     }
 
@@ -141,14 +181,24 @@ final class CanvasView: NSView {
     }
 
 
-    // MARK: - Mouse (pan by dragging background)
+    // MARK: - Mouse
 
-    private var lastDragPoint: CGPoint?
+
+    /// Fires on mouseUp after a rubber-band drag on the background.
+    /// CGRect is in world space; Bool is true when Shift was held (additive select).
+    var onRubberBandSelect: ((CGRect, Bool) -> Void)?
+
+    private enum DragState {
+        case idle
+        case rubberBand(start: CGPoint)  // world-space origin
+        case panning(last: CGPoint)      // screen-space last point
+    }
+    private var dragState: DragState = .idle
 
     override func mouseDown(with event: NSEvent) {
         // With fullSizeContentView + transparent title bar, the canvas covers the title bar
         // area. If the click is above contentLayoutRect, route to window dragging rather
-        // than starting a canvas pan.
+        // than starting a canvas interaction.
         if let win = window, event.locationInWindow.y > win.contentLayoutRect.maxY {
             win.performDrag(with: event)
             return
@@ -157,9 +207,15 @@ final class CanvasView: NSView {
         let loc = convert(event.locationInWindow, from: nil)
         let worldPt = convert(loc, to: worldView)
 
-        // Non-pointer tools intercept all clicks on the canvas background
+        // Non-pointer tools intercept all clicks on the canvas background.
         if activeTool != .pointer {
             onToolBegan?(activeTool, worldPt)
+            return
+        }
+
+        // Middle-click or Cmd+drag → pan mode.
+        if event.buttonNumber == 2 || event.modifierFlags.contains(.command) {
+            dragState = .panning(last: loc)
             return
         }
 
@@ -167,32 +223,51 @@ final class CanvasView: NSView {
             ($0 as? TerminalWindowView)?.frame.contains(worldPt) == true
         }
         guard !onTerminal else { return }
-        lastDragPoint = loc
+
+        onBackgroundClick?(worldPt)
         if event.clickCount == 2 {
             onBackgroundDoubleClick?(worldPt)
+            return
         }
+        // Start rubber-band selection.
+        dragState = .rubberBand(start: worldPt)
+        setSelectionRect(CGRect(origin: worldPt, size: .zero))
     }
 
     override func mouseDragged(with event: NSEvent) {
-        if activeTool != .pointer {
-            let loc = convert(event.locationInWindow, from: nil)
+        let loc = convert(event.locationInWindow, from: nil)
+        switch dragState {
+        case .panning(let last):
+            viewport.pan(dx: loc.x - last.x, dy: loc.y - last.y)
+            applyViewport()
+            dragState = .panning(last: loc)
+        case .rubberBand(let start):
             let worldPt = convert(loc, to: worldView)
-            onToolMoved?(activeTool, worldPt)
-            return
+            setSelectionRect(.between(start, worldPt))
+        default:
+            if activeTool != .pointer {
+                onToolMoved?(activeTool, convert(loc, to: worldView))
+            }
         }
-        guard lastDragPoint != nil else { return }
-        viewport.pan(dx: event.deltaX, dy: event.deltaY)
-        applyViewport()
     }
 
     override func mouseUp(with event: NSEvent) {
-        if activeTool != .pointer {
-            let loc = convert(event.locationInWindow, from: nil)
-            let worldPt = convert(loc, to: worldView)
-            onToolEnded?(activeTool, worldPt)
-            return
+        let loc = convert(event.locationInWindow, from: nil)
+        let worldPt = convert(loc, to: worldView)
+        switch dragState {
+        case .rubberBand(let start):
+            setSelectionRect(nil)
+            let rect = CGRect.between(start, worldPt)
+            if rect.width >= 5 || rect.height >= 5 {
+                onRubberBandSelect?(rect, NSEvent.modifierFlags.contains(.shift))
+            }
+        case .panning: break
+        default:
+            if activeTool != .pointer {
+                onToolEnded?(activeTool, worldPt)
+            }
         }
-        lastDragPoint = nil
+        dragState = .idle
     }
 
     // MARK: - Viewport application
@@ -212,6 +287,9 @@ final class CanvasView: NSView {
             size: CGSize(width: bounds.width / zoom, height: bounds.height / zoom)
         )
         CATransaction.commit()
+        if selectionRingsLayer.path != nil {
+            selectionRingsLayer.lineWidth = 2 / viewport.zoom
+        }
         onViewportChanged?(viewport)
     }
 
@@ -315,12 +393,21 @@ final class CanvasView: NSView {
             if let tw = sub as? TerminalWindowView, tw.frame.contains(worldPt) {
                 if NSEvent.pressedMouseButtons != 0 {
                     worldView.addSubview(tw)   // bring to front
-                    activate(tw)
+                    let isShift = NSEvent.modifierFlags.contains(.shift)
+                    onTerminalPressed?(tw, isShift)
+                    if !isShift {
+                        activate(tw)
+                        tw.focusTerminal()
+                    }
                 }
                 if let deepest = tw.hitTest(worldPt) { return deepest }
                 return tw
             }
             if let av = sub as? AnnotationView, av.frame.contains(worldPt) {
+                if NSEvent.pressedMouseButtons != 0 {
+                    let isShift = NSEvent.modifierFlags.contains(.shift)
+                    onAnnotationPressed?(av, isShift)
+                }
                 if let deepest = av.hitTest(worldPt) { return deepest }
                 return av
             }

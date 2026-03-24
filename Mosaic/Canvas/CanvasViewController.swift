@@ -1,5 +1,6 @@
 import AppKit
 import CoreVideo
+import os
 
 // MARK: - Snap guide overlay
 
@@ -36,13 +37,10 @@ private extension CVTimeStamp {
 
 final class CanvasViewController: NSViewController {
 
-    private static let defaultShell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
-
     // MARK: - Subviews
 
     private let canvasView = CanvasView()
     private let minimapView = MinimapView()
-    private let terminalManager = TerminalManager()
     private let toolPalette = ToolPaletteView()
     private let fpsLabel: NSTextField = {
         let f = NSTextField(labelWithString: "")
@@ -65,13 +63,17 @@ final class CanvasViewController: NSViewController {
         f.translatesAutoresizingMaskIntoConstraints = false
         return f
     }()
+    // nonisolated(unsafe): CVDisplayLink must be stopped in deinit (nonisolated context).
+    // Written once on the main thread during setup; only read in deinit after all
+    // references are dropped, so there is no concurrent access.
     nonisolated(unsafe) private var fpsDisplayLink: CVDisplayLink?
-    nonisolated(unsafe) private var pendingViewportUpdate = false
+    /// Guards cross-thread access between the main actor (writer) and the CVDisplayLink
+    /// callback thread (reader/writer). Same pattern as MinimapView.renderFlags.
+    private let pendingViewportUpdate = OSAllocatedUnfairLock(initialState: false)
     private var fpsFrameTimes: [CFTimeInterval] = []
 
     // MARK: - State
 
-    private var broadcastMode = false
     private var saveDebounceTimer: Timer?
     private var workspaceRestored = false
     var currentTheme: Theme = {
@@ -80,13 +82,21 @@ final class CanvasViewController: NSViewController {
     }()
 
     private var themeEditorWindow: NSWindow?
-    private var terminalSettingsWindow: NSWindow?
     private var deleteSelectionStart: CGPoint?
 
-    /// All live annotation views (in world space).
-    var annotations: [AnnotationView] = []
-    /// In-progress annotation during freehand/arrow draw.
-    private var activeAnnotation: AnnotationView?
+    // MARK: - Controllers
+
+    private var terminalController: TerminalController!
+    private var annotationController: AnnotationController!
+
+    // MARK: - Multi-selection
+
+    var selectedTerminalIDs: Set<UUID> = []
+    var selectedAnnotationIDs: Set<UUID> = []
+
+    /// Peer frames captured at the start of a group drag for undo registration.
+    private var dragPeerTermSnapshots: [(TerminalWindowView, CGRect)] = []
+    private var dragPeerAnnotSnapshots: [(AnnotationView, CGRect)] = []
 
     // MARK: - Lifecycle
 
@@ -100,6 +110,72 @@ final class CanvasViewController: NSViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
+        terminalController = TerminalController(
+            canvasView: canvasView,
+            undoManager: { [weak self] in self?.undoManager },
+            theme: { [weak self] in self?.currentTheme ?? .dark },
+            snap: { [weak self] proposed, tw, edge in
+                guard let self else { return proposed }
+                return self.snapPosition(proposed, excludingTerminal: tw, edge: edge)
+            },
+            clearSnap: { [weak self] in self?.snapOverlay.guides = [] }
+        )
+        terminalController.onChange = { [weak self] in
+            self?.updateMinimap()
+            self?.updateSelectionRings()
+            self?.scheduleSave()
+        }
+        terminalController.onTerminalRemoved = { [weak self] tw in
+            self?.selectedTerminalIDs.remove(tw.id)
+        }
+        terminalController.onDragDelta = { [weak self] tw, dx, dy in
+            self?.moveSelectionPeers(of: tw, dx: dx, dy: dy)
+        }
+        terminalController.onDragBegan = { [weak self] tw in
+            guard let self else { return }
+            dragPeerTermSnapshots = terminalController.windows
+                .filter { selectedTerminalIDs.contains($0.id) && $0 !== tw }
+                .map { ($0, $0.frame) }
+            dragPeerAnnotSnapshots = annotationController.annotations
+                .filter { selectedAnnotationIDs.contains($0.annotationID) }
+                .map { ($0, $0.frame) }
+        }
+        terminalController.onMoveEnded = { [weak self] _ in
+            self?.registerPeerUndos()
+        }
+        annotationController = AnnotationController(
+            canvasView: canvasView,
+            undoManager: { [weak self] in self?.undoManager },
+            theme: { [weak self] in self?.currentTheme ?? .dark },
+            snap: { [weak self] proposed, av, edge in
+                guard let self else { return proposed }
+                return self.snapPosition(proposed, excludingAnnotation: av, edge: edge)
+            },
+            clearSnap: { [weak self] in self?.snapOverlay.guides = [] }
+        )
+        annotationController.onChange = { [weak self] in
+            self?.updateMinimap()
+            self?.updateSelectionRings()
+            self?.scheduleSave()
+        }
+        annotationController.onRemoved = { [weak self] av in
+            self?.selectedAnnotationIDs.remove(av.annotationID)
+        }
+        annotationController.onDragDelta = { [weak self] av, dx, dy in
+            self?.moveSelectionPeers(of: av, dx: dx, dy: dy)
+        }
+        annotationController.onDragBegan = { [weak self] av in
+            guard let self else { return }
+            dragPeerTermSnapshots = terminalController.windows
+                .filter { selectedTerminalIDs.contains($0.id) }
+                .map { ($0, $0.frame) }
+            dragPeerAnnotSnapshots = annotationController.annotations
+                .filter { selectedAnnotationIDs.contains($0.annotationID) && $0 !== av }
+                .map { ($0, $0.frame) }
+        }
+        annotationController.onMoveEnded = { [weak self] _ in
+            self?.registerPeerUndos()
+        }
         setupCanvas()
         setupMinimap()
         setupToolPalette()
@@ -138,7 +214,29 @@ final class CanvasViewController: NSViewController {
         canvasView.setCanvasBackground(currentTheme.canvasBackground)
 
         canvasView.onBackgroundDoubleClick = { [weak self] worldPt in
-            self?.spawnTerminal(at: worldPt)
+            self?.terminalController.spawn(at: worldPt)
+        }
+
+        canvasView.onBackgroundClick = { [weak self] _ in
+            self?.clearSelection()
+        }
+
+        canvasView.onTerminalPressed = { [weak self] tw, isShift in
+            guard let self else { return }
+            if isShift {
+                toggleSelection(tw)
+            } else if !selectedTerminalIDs.contains(tw.id) {
+                clearSelection()
+            }
+        }
+
+        canvasView.onAnnotationPressed = { [weak self] av, isShift in
+            guard let self else { return }
+            if isShift {
+                toggleSelection(av)
+            } else if !selectedAnnotationIDs.contains(av.annotationID) {
+                clearSelection()
+            }
         }
 
         canvasView.onViewportChanged = { [weak self] _ in
@@ -146,7 +244,7 @@ final class CanvasViewController: NSViewController {
             updateMinimap()
             updateZoomLabel()
             scheduleSave()
-            pendingViewportUpdate = true
+            pendingViewportUpdate.withLock { $0 = true }
             if toolPalette.focusFollowsCenter { updateFocusFollowsCenter() }
         }
     }
@@ -171,6 +269,12 @@ final class CanvasViewController: NSViewController {
         }
         canvasView.onToolEnded = { [weak self] tool, worldPt in
             self?.handleToolEnded(tool, at: worldPt)
+        }
+        canvasView.onRubberBandSelect = { [weak self] rect, additive in
+            guard let self else { return }
+            if !additive { clearSelection() }
+            for tw in terminalController.windows where rect.intersects(tw.frame) { toggleSelection(tw) }
+            for av in annotationController.annotations where rect.intersects(av.frame) { toggleSelection(av) }
         }
     }
 
@@ -228,7 +332,12 @@ final class CanvasViewController: NSViewController {
             let t = now.pointee.timeInterval
             // Only count ticks where the canvas actually rendered a new frame.
             // This shows real canvas FPS rather than the display's hardware refresh rate.
-            guard vc.pendingViewportUpdate else {
+            let didUpdate = vc.pendingViewportUpdate.withLock { state -> Bool in
+                guard state else { return false }
+                state = false
+                return true
+            }
+            guard didUpdate else {
                 // Nothing rendered — if the last recorded frame is > 1s old, show 0.
                 DispatchQueue.main.async {
                     vc.fpsFrameTimes.removeAll { $0 < t - 1.0 }
@@ -238,7 +347,6 @@ final class CanvasViewController: NSViewController {
                 }
                 return kCVReturnSuccess
             }
-            vc.pendingViewportUpdate = false
             DispatchQueue.main.async {
                 vc.fpsFrameTimes.append(t)
                 vc.fpsFrameTimes.removeAll { $0 < t - 1.0 }
@@ -259,149 +367,23 @@ final class CanvasViewController: NSViewController {
         }
     }
 
-    // MARK: - Terminal spawning
+    // MARK: - Terminal spawning (delegated to TerminalController)
 
-    @objc func spawnTerminalAtCenter() {
-        let center = canvasView.viewport.screenToWorld(
-            CGPoint(x: canvasView.bounds.midX, y: canvasView.bounds.midY)
-        )
-        spawnTerminal(at: center)
-    }
+    @objc func spawnTerminalAtCenter() { terminalController.spawnAtCenter() }
 
-    private func spawnTerminal(at worldPt: CGPoint, shell: String = CanvasViewController.defaultShell, cwd: String? = nil) {
-        let size = CGSize(width: 600, height: 400)
-        let origin = CGPoint(x: worldPt.x - size.width / 2, y: worldPt.y - size.height / 2)
-        let frame = CGRect(origin: origin, size: size)
-        spawnTerminalWithFrame(frame, shell: shell, cwd: cwd)
-    }
-
-    private func spawnTerminalWithFrame(_ frame: CGRect, shell: String = CanvasViewController.defaultShell, cwd: String? = nil, scrollback: String? = nil) {
-        // Validate that the shell path is an executable file before spawning.
-        // Guards against a tampered workspace.json specifying an arbitrary path.
-        let resolvedShell: String
-        if FileManager.default.isExecutableFile(atPath: shell) {
-            resolvedShell = shell
-        } else {
-            resolvedShell = CanvasViewController.defaultShell
-        }
-
-        let tw = terminalManager.spawn(frame: frame, shell: resolvedShell, cwd: cwd)
-        tw.restoredScrollback = scrollback
-        tw.canvasView = canvasView
-        tw.theme = currentTheme
-
-        tw.onClose = { [weak self, weak tw] in
-            guard let self, let tw else { return }
-            self.removeTerminal(tw)
-        }
-
-        tw.onMoved = { [weak self] in
-            self?.updateMinimap()
-            self?.scheduleSave()
-        }
-
-        tw.onMoveEnded = { [weak self, weak tw] fromFrame, toFrame in
-            guard let self, let tw else { return }
-            undoManager?.setActionName("Move Terminal")
-            undoManager?.registerUndo(withTarget: self) { @MainActor vc in
-                vc.moveTerminal(tw, to: fromFrame)
-            }
-        }
-        tw.snapFrame = { [weak self, weak tw] proposed, edge in
-            guard let self else { return proposed }
-            return self.snapPosition(proposed, excludingTerminal: tw, edge: edge)
-        }
-        tw.clearSnapGuides = { [weak self] in self?.snapOverlay.guides = [] }
-
-        tw.onBroadcastKey = { [weak self] data in
-            self?.broadcastKeyData(data, excluding: tw)
-        }
-
-        canvasView.addTerminal(tw)
-        canvasView.activateTerminal(tw)
-        tw.focusTerminal()
-
-        undoManager?.setActionName("New Terminal")
-        undoManager?.registerUndo(withTarget: self) { @MainActor [weak tw] vc in
-            guard let tw else { return }
-            vc.removeTerminal(tw)
-        }
-
-        updateMinimap()
-        scheduleSave()
-    }
-
-    private func removeTerminal(_ tw: TerminalWindowView) {
-        let savedFrame = tw.frame
-        let savedShell = tw.shell
-        let savedCwd   = tw.currentCwd
-        undoManager?.setActionName("Close Terminal")
-        undoManager?.registerUndo(withTarget: self) { @MainActor vc in
-            vc.spawnTerminalWithFrame(savedFrame, shell: savedShell, cwd: savedCwd)
-        }
-        // Nil out onClose before kill: terminate() sends EOF which causes the shell to
-        // exit, firing processTerminated -> onClose -> removeTerminal a second time,
-        // which would register a duplicate undo entry and produce two terminals on undo.
-        tw.onClose = nil
-        terminalManager.kill(tw)
-        updateMinimap()
-        scheduleSave()
-    }
-
-    private func moveTerminal(_ tw: TerminalWindowView, to newFrame: CGRect) {
-        let oldFrame = tw.frame
-        undoManager?.setActionName("Move Terminal")
-        undoManager?.registerUndo(withTarget: self) { @MainActor [weak tw] vc in
-            guard let tw else { return }
-            vc.moveTerminal(tw, to: oldFrame)
-        }
-        tw.frame = newFrame
-        updateMinimap()
-        scheduleSave()
-    }
-
-    // MARK: - Annotation tool handling
+    // MARK: - Tool handling
 
     private func handleToolBegan(_ tool: CanvasTool, at worldPt: CGPoint) {
         switch tool {
         case .pointer: break
-
         case .delete:
             deleteSelectionStart = worldPt
             canvasView.setSelectionRect(CGRect(origin: worldPt, size: .zero))
-
         case .terminal:
-            spawnTerminal(at: worldPt)
+            terminalController.spawn(at: worldPt)
             setTool(.pointer)
-
-        case .text:
-            let av = TextAnnotationView(at: worldPt)
-            av.textColor = currentTheme.annotationColor
-            av.annotationFont = currentTheme.annotationFont
-            addAnnotation(av)
-            av.beginEditing()
-
-        case .stickyNote:
-            let av = StickyNoteView(at: worldPt)
-            av.themeForeground = currentTheme.stickyForeground
-            av.themeBackground = currentTheme.stickyBackground
-            addAnnotation(av)
-            av.beginEditing()
-
-        case .arrow:
-            let av = ArrowAnnotationView(start: worldPt, end: worldPt)
-            av.strokeColor = currentTheme.annotationColor
-            activeAnnotation = av
-            addAnnotation(av)
-
-        case .pen:
-            let av = FreehandAnnotationView(at: worldPt)
-            av.strokeColor = currentTheme.annotationColor
-            activeAnnotation = av
-            addAnnotation(av)
-
-        case .image:
-            pickImage(at: worldPt)
+        default:
+            annotationController.toolBegan(tool, at: worldPt)
         }
     }
 
@@ -410,131 +392,113 @@ final class CanvasViewController: NSViewController {
         case .delete:
             guard let start = deleteSelectionStart else { return }
             canvasView.setSelectionRect(selectionRect(from: start, to: worldPt))
-        case .arrow:
-            (activeAnnotation as? ArrowAnnotationView)?.updateEnd(worldPt)
-            updateMinimap()
-        case .pen:
-            (activeAnnotation as? FreehandAnnotationView)?.addWorldPoint(worldPt)
-            updateMinimap()
-        default: break
+        default:
+            annotationController.toolMoved(tool, at: worldPt)
         }
     }
 
     private func handleToolEnded(_ tool: CanvasTool, at worldPt: CGPoint) {
-        switch tool {
-        case .delete:
+        if tool == .delete {
             canvasView.setSelectionRect(nil)
-            guard let start = deleteSelectionStart else { break }
+            guard let start = deleteSelectionStart else { return }
             deleteSelectionStart = nil
             let rect = selectionRect(from: start, to: worldPt)
             if rect.width < 5 && rect.height < 5 {
-                // Single click — point hit test
-                if let tw = terminalManager.windows.first(where: { $0.frame.contains(worldPt) }) {
+                if let tw = terminalController.windows.first(where: { $0.frame.contains(worldPt) }) {
                     tw.onClose?()
-                } else if let av = annotations.first(where: { $0.frame.contains(worldPt) }) {
-                    removeAnnotation(av)
+                } else if let av = annotationController.annotationAtPoint(worldPt) {
+                    annotationController.remove(av)
                 }
             } else {
-                // Drag — delete everything intersecting the selection rect
-                for tw in terminalManager.windows.filter({ rect.intersects($0.frame) }) { tw.onClose?() }
-                for av in annotations.filter({ rect.intersects($0.frame) }) { removeAnnotation(av) }
+                for tw in terminalController.windows where rect.intersects(tw.frame) { tw.onClose?() }
+                for av in annotationController.annotationsIntersecting(rect) { annotationController.remove(av) }
             }
-        case .arrow:
-            (activeAnnotation as? ArrowAnnotationView)?.updateEnd(worldPt)
-        default: break
+        } else {
+            annotationController.toolEnded(tool, at: worldPt)
         }
-        activeAnnotation = nil
         scheduleSave()
     }
 
-    private func selectionRect(from a: CGPoint, to b: CGPoint) -> CGRect {
-        CGRect(x: min(a.x, b.x), y: min(a.y, b.y),
-               width: abs(b.x - a.x), height: abs(b.y - a.y))
+    private func selectionRect(from a: CGPoint, to b: CGPoint) -> CGRect { .between(a, b) }
+
+    // MARK: - Multi-selection helpers
+
+    func toggleSelection(_ tw: TerminalWindowView) {
+        selectedTerminalIDs.formSymmetricDifference([tw.id])
+        updateSelectionRings()
     }
 
-    func addAnnotation(_ av: AnnotationView) {
-        av.onDelete = { [weak self, weak av] in
-            guard let av else { return }
-            self?.removeAnnotation(av)
-        }
-        av.onChanged = { [weak self] in
-            self?.updateMinimap()
-            self?.scheduleSave()
-        }
-        av.onDragEnded = { [weak self, weak av] fromFrame, _ in
-            guard let self, let av else { return }
-            undoManager?.beginUndoGrouping()
-            undoManager?.setActionName("Move")
-            undoManager?.registerUndo(withTarget: self) { @MainActor [weak av] vc in
-                guard let av else { return }
-                vc.moveAnnotation(av, to: fromFrame)
-            }
-            undoManager?.endUndoGrouping()
-        }
-        av.snapFrame = { [weak self, weak av] proposed, edge in
-            guard let self else { return proposed }
-            return self.snapPosition(proposed, excludingAnnotation: av, edge: edge)
-        }
-        av.clearSnapGuides = { [weak self] in self?.snapOverlay.guides = [] }
-        undoManager?.beginUndoGrouping()
-        undoManager?.setActionName("Add Annotation")
-        undoManager?.registerUndo(withTarget: self) { @MainActor [weak av] vc in
-            guard let av else { return }
-            vc.removeAnnotation(av)
-        }
-        undoManager?.endUndoGrouping()
-        annotations.append(av)
-        canvasView.addAnnotation(av)
-        updateMinimap()
-        scheduleSave()
+    func toggleSelection(_ av: AnnotationView) {
+        selectedAnnotationIDs.formSymmetricDifference([av.annotationID])
+        updateSelectionRings()
     }
 
-    func removeAnnotation(_ av: AnnotationView) {
-        undoManager?.beginUndoGrouping()
-        undoManager?.setActionName("Delete Annotation")
-        // Strong capture: av is removed from the view hierarchy below, so nothing
-        // else retains it. The undo manager must hold it alive until undo is cleared.
-        undoManager?.registerUndo(withTarget: self) { @MainActor vc in
-            vc.addAnnotation(av)
-        }
-        undoManager?.endUndoGrouping()
-        annotations.removeAll { $0 === av }
-        canvasView.removeAnnotation(av)
-        updateMinimap()
-        scheduleSave()
+    func clearSelection() {
+        guard !selectedTerminalIDs.isEmpty || !selectedAnnotationIDs.isEmpty else { return }
+        selectedTerminalIDs.removeAll()
+        selectedAnnotationIDs.removeAll()
+        updateSelectionRings()
     }
 
-    func moveAnnotation(_ av: AnnotationView, to newFrame: CGRect) {
-        let oldFrame = av.frame
-        undoManager?.beginUndoGrouping()
+    private func updateSelectionRings() {
+        var frames: [CGRect] = []
+        for tw in terminalController.windows where selectedTerminalIDs.contains(tw.id) {
+            frames.append(tw.frame)
+        }
+        for av in annotationController.annotations where selectedAnnotationIDs.contains(av.annotationID) {
+            frames.append(av.frame)
+        }
+        canvasView.updateSelectionRings(frames)
+    }
+
+    /// Registers undo for all peer items captured at drag start, then clears snapshots.
+    /// Called in the same mouseUp event as the source's undo registration so groupsByEvent
+    /// automatically bundles source + peers into one Cmd+Z action.
+    private func registerPeerUndos() {
+        defer {
+            dragPeerTermSnapshots.removeAll()
+            dragPeerAnnotSnapshots.removeAll()
+        }
+        guard !dragPeerTermSnapshots.isEmpty || !dragPeerAnnotSnapshots.isEmpty else { return }
         undoManager?.setActionName("Move")
-        undoManager?.registerUndo(withTarget: self) { @MainActor [weak av] vc in
-            guard let av else { return }
-            vc.moveAnnotation(av, to: oldFrame)
+        for (tw, startFrame) in dragPeerTermSnapshots {
+            let sf = startFrame
+            undoManager?.registerUndo(withTarget: terminalController) { [weak tw] tc in
+                guard let tw else { return }
+                tc.move(tw, to: sf)
+            }
         }
-        undoManager?.endUndoGrouping()
-        av.frame = newFrame
-        updateMinimap()
-        scheduleSave()
+        for (av, startFrame) in dragPeerAnnotSnapshots {
+            let sf = startFrame
+            undoManager?.registerUndo(withTarget: annotationController) { [weak av] ac in
+                guard let av else { return }
+                ac.move(av, to: sf)
+            }
+        }
     }
 
-    private func pickImage(at worldPt: CGPoint) {
-        let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.image]
-        panel.allowsMultipleSelection = false
-        panel.begin { [weak self] response in
-            guard let self, response == .OK, let url = panel.url else { return }
-            guard let av = ImageAnnotationView(at: worldPt, url: url) else {
-                let alert = NSAlert()
-                alert.messageText = "Couldn't open image"
-                alert.informativeText = "\(url.lastPathComponent) could not be read as an image."
-                alert.alertStyle = .warning
-                alert.runModal()
-                return
-            }
-            addAnnotation(av)
+    /// Move all selected items that are not `source` by the given world-space delta.
+    /// Callers handle the subsequent minimap + ring refresh via annotationController.onChange.
+    func moveSelectionPeers(of source: AnyObject?, dx: CGFloat, dy: CGFloat) {
+        guard !selectedTerminalIDs.isEmpty || !selectedAnnotationIDs.isEmpty else { return }
+        for tw in terminalController.windows
+            where selectedTerminalIDs.contains(tw.id) && tw !== source {
+            tw.frame.origin.x += dx
+            tw.frame.origin.y += dy
+        }
+        for av in annotationController.annotations
+            where selectedAnnotationIDs.contains(av.annotationID) && av !== source {
+            av.frame.origin.x += dx
+            av.frame.origin.y += dy
         }
     }
+
+    // MARK: - Annotation forwarders (keep call sites in tests and undo blocks stable)
+
+    var annotations: [AnnotationView]                             { annotationController.annotations }
+    func addAnnotation(_ av: AnnotationView)                      { annotationController.add(av) }
+    func removeAnnotation(_ av: AnnotationView)                   { annotationController.remove(av) }
+    func moveAnnotation(_ av: AnnotationView, to f: CGRect)       { annotationController.move(av, to: f) }
 
     // MARK: - Snap overlay
 
@@ -558,10 +522,14 @@ final class CanvasViewController: NSViewController {
         // Drawing annotations (arrows, freehand, images) have padded or irregular frames
         // that don't correspond to visible rectangular boundaries, so they create
         // confusing phantom snap points near real elements.
-        let boxAnnotations = annotations.filter {
-            $0 !== excludingAnnotation && ($0 is StickyNoteView || $0 is TextAnnotationView || $0 is ImageAnnotationView)
+        let boxAnnotations = annotationController.annotations.filter {
+            $0 !== excludingAnnotation
+            && !selectedAnnotationIDs.contains($0.annotationID)
+            && ($0 is StickyNoteView || $0 is TextAnnotationView || $0 is ImageAnnotationView)
         }
-        return terminalManager.windows.filter { $0 !== excludingTerminal }.map(\.frame)
+        return terminalController.windows
+            .filter { $0 !== excludingTerminal && !selectedTerminalIDs.contains($0.id) }
+            .map(\.frame)
             + boxAnnotations.map(\.frame)
     }
 
@@ -649,23 +617,8 @@ final class CanvasViewController: NSViewController {
         currentTheme = theme
         UserDefaults.standard.set(theme.id, forKey: "themeID")
         canvasView.setCanvasBackground(theme.canvasBackground)
-        for w in terminalManager.windows { w.applyTheme(theme) }
-        for av in annotations {
-            switch av {
-            case let sv as StickyNoteView:
-                sv.themeForeground = theme.stickyForeground
-                sv.themeBackground = theme.stickyBackground
-            case let tv as TextAnnotationView:
-                tv.textColor = theme.annotationColor
-                tv.annotationFont = theme.annotationFont
-            case let ar as ArrowAnnotationView:
-                ar.strokeColor = theme.annotationColor
-            case let fh as FreehandAnnotationView:
-                fh.strokeColor = theme.annotationColor
-            default:
-                break
-            }
-        }
+        terminalController.applyTheme(theme)
+        annotationController.applyTheme(theme)
         updateMinimap()
     }
 
@@ -714,6 +667,9 @@ final class CanvasViewController: NSViewController {
         panel.hidesOnDeactivate = false
         panel.center()
         panel.makeKeyAndOrderFront(nil)
+        // NSColorPanel defaults to the lower-left corner of the screen if it has never been
+        // positioned by the user. Center it so it appears near the theme editor.
+        if !NSColorPanel.shared.isVisible { NSColorPanel.shared.center() }
 
         NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification,
                                                object: panel, queue: .main) { [weak self] _ in
@@ -722,58 +678,11 @@ final class CanvasViewController: NSViewController {
         themeEditorWindow = panel
     }
 
-    @objc func openTerminalSettings() {
-        if let existing = terminalSettingsWindow {
-            existing.makeKeyAndOrderFront(nil)
-            return
-        }
-
-        let vc = TerminalSettingsViewController()
-        vc.onApply = { [weak self] settings in
-            self?.terminalManager.windows.forEach { $0.applyTerminalSettings(settings) }
-        }
-        vc.sizingOptions = [.preferredContentSize]
-
-        let panel = NSPanel(
-            contentRect: .zero,
-            styleMask: [.titled, .closable],
-            backing: .buffered,
-            defer: false
-        )
-        panel.title = "Terminal Settings"
-        panel.contentViewController = vc
-        panel.isFloatingPanel = true
-        panel.hidesOnDeactivate = false
-        panel.center()
-        panel.makeKeyAndOrderFront(nil)
-
-        NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification,
-                                               object: panel, queue: .main) { [weak self] _ in
-            Task { @MainActor [weak self] in self?.terminalSettingsWindow = nil }
-        }
-        terminalSettingsWindow = panel
-    }
+    @objc func openTerminalSettings() { terminalController.openTerminalSettings() }
 
     // MARK: - Broadcast
 
-    @objc func toggleBroadcast() {
-        broadcastMode.toggle()
-        canvasView.broadcastModeActive = broadcastMode
-        for w in terminalManager.windows {
-            w.setBroadcastHighlight(broadcastMode)
-        }
-        // Ensure a terminal has focus so typing broadcasts immediately
-        if broadcastMode, let first = terminalManager.windows.first {
-            first.focusTerminal()
-        }
-    }
-
-    private func broadcastKeyData(_ data: Data, excluding source: TerminalWindowView) {
-        guard broadcastMode else { return }
-        for w in terminalManager.windows where w !== source {
-            w.sendInput(data)
-        }
-    }
+    @objc func toggleBroadcast() { terminalController.toggleBroadcast() }
 
     // MARK: - Workspace persistence
 
@@ -787,13 +696,7 @@ final class CanvasViewController: NSViewController {
             return
         }
 
-        for w in snapshot.windows {
-            spawnTerminalWithFrame(
-                CGRect(x: w.x, y: w.y, width: w.width, height: w.height),
-                cwd: w.cwd,
-                scrollback: w.scrollback
-            )
-        }
+        terminalController.restore(snapshot.windows)
 
         for s in snapshot.annotations {
             restoreAnnotation(s)
@@ -804,7 +707,7 @@ final class CanvasViewController: NSViewController {
     }
 
     private func zoomToFitAllElements() {
-        let frames = terminalManager.windows.map(\.frame) + annotations.map(\.frame)
+        let frames = terminalController.windows.map(\.frame) + annotationController.annotations.map(\.frame)
         guard let first = frames.first else { return }
         let worldBounds = frames.dropFirst().reduce(first) { $0.union($1) }
         var vp = Viewport()
@@ -813,61 +716,20 @@ final class CanvasViewController: NSViewController {
     }
 
     func restoreAnnotation(_ s: AnnotationSnapshot) {
-        let frame = CGRect(x: s.x, y: s.y, width: s.width, height: s.height)
-        switch s.kind {
-        case .text:
-            let av = TextAnnotationView(at: frame.origin, text: s.content ?? "")
-            av.frame = frame
-            av.textColor = currentTheme.annotationColor
-            av.annotationFont = currentTheme.annotationFont
-            addAnnotation(av)
-
-        case .stickyNote:
-            let color = StickyNoteView.NoteColor(rawValue: s.colorName ?? "yellow") ?? .yellow
-            let av = StickyNoteView(at: frame.origin, color: color, text: s.content ?? "")
-            av.frame = frame
-            av.themeForeground = currentTheme.stickyForeground
-            av.themeBackground = currentTheme.stickyBackground
-            addAnnotation(av)
-
-        case .arrow:
-            guard let pts = s.points, pts.count >= 2 else { return }
-            let av = ArrowAnnotationView(start: CGPoint(x: pts[0].x, y: pts[0].y),
-                                         end:   CGPoint(x: pts[1].x, y: pts[1].y))
-            av.strokeColor = currentTheme.annotationColor
-            addAnnotation(av)
-
-        case .freehand:
-            guard let pts = s.points else { return }
-            let av = FreehandAnnotationView(at: CGPoint(x: s.x, y: s.y))
-            av.loadWorldPoints(pts.map { CGPoint(x: $0.x, y: $0.y) })
-            av.strokeWidth = s.lineWidth ?? 2
-            av.strokeColor = currentTheme.annotationColor
-            addAnnotation(av)
-
-        case .image:
-            guard let path = s.imagePath else { return }
-            // Restrict image loads to the app's own Images directory to prevent
-            // a tampered workspace.json from reading arbitrary files via path traversal.
-            let allowedPrefix = WorkspaceStore.shared.imagesDirectory.path
-            guard path.hasPrefix(allowedPrefix + "/") || path == allowedPrefix else { return }
-            guard let image = NSImage(contentsOfFile: path) else { return }
-            let av = ImageAnnotationView(at: frame.origin, image: image)
-            av.frame = frame
-            addAnnotation(av)
-        }
+        annotationController.restore(s)
     }
 
     private func updateMinimap() {
-        minimapView.update(viewport: canvasView.viewport, windows: terminalManager.windows,
-                           annotations: annotations, focusedWindow: canvasView.activeTerminal)
+        minimapView.update(viewport: canvasView.viewport, windows: terminalController.windows,
+                           annotations: annotationController.annotations,
+                           focusedWindow: canvasView.activeTerminal)
     }
 
     private func updateFocusFollowsCenter() {
         guard toolPalette.focusFollowsCenter else { return }
         let screenCenter = CGPoint(x: canvasView.bounds.midX, y: canvasView.bounds.midY)
         let worldCenter = canvasView.viewport.screenToWorld(screenCenter)
-        guard let closest = terminalManager.windows.min(by: {
+        guard let closest = terminalController.windows.min(by: {
             let da = hypot($0.frame.midX - worldCenter.x, $0.frame.midY - worldCenter.y)
             let db = hypot($1.frame.midX - worldCenter.x, $1.frame.midY - worldCenter.y)
             return da < db
@@ -885,25 +747,11 @@ final class CanvasViewController: NSViewController {
     }
 
     @objc func saveWorkspace() {
-        let windowSnapshots = terminalManager.windows.map { w -> WorkspaceSnapshot.WindowSnapshot in
-            WorkspaceSnapshot.WindowSnapshot(
-                id: w.id,
-                x: w.frame.origin.x,
-                y: w.frame.origin.y,
-                width: w.frame.width,
-                height: w.frame.height,
-                shell: w.shell,
-                cwd: w.currentCwd,
-                title: w.currentTitle,
-                scrollback: w.extractScrollbackText()
-            )
-        }
-        let annotationSnapshots = annotations.compactMap { $0.toSnapshot() }
         let vp = canvasView.viewport
         let snapshot = WorkspaceSnapshot(
             viewport: WorkspaceSnapshot.ViewportState(panX: vp.panX, panY: vp.panY, zoom: vp.zoom),
-            windows: windowSnapshots,
-            annotations: annotationSnapshots
+            windows: terminalController.makeSnapshots(),
+            annotations: annotationController.annotations.compactMap { $0.toSnapshot() }
         )
         WorkspaceStore.shared.save(snapshot)
     }
@@ -912,58 +760,11 @@ final class CanvasViewController: NSViewController {
 
     // MARK: - Window menu actions
 
-    /// Close the currently active terminal. No-op if none is focused.
-    @objc func closeActiveTerminal() {
-        guard let tw = canvasView.activeTerminal else { return }
-        removeTerminal(tw)
-    }
-
-    @objc func focusTerminalLeft()  { focusNearest(.left)  }
-    @objc func focusTerminalRight() { focusNearest(.right) }
-    @objc func focusTerminalUp()    { focusNearest(.up)    }
-    @objc func focusTerminalDown()  { focusNearest(.down)  }
-
-    enum FocusDirection {
-        case left, right, up, down
-
-        func contains(_ candidate: CGPoint, relativeTo origin: CGPoint) -> Bool {
-            let dx = candidate.x - origin.x
-            let dy = candidate.y - origin.y
-            switch self {
-            case .left:  return dx < 0 && abs(dy) <= abs(dx)
-            case .right: return dx > 0 && abs(dy) <= abs(dx)
-            case .up:    return dy < 0 && abs(dx) < abs(dy)
-            case .down:  return dy > 0 && abs(dx) < abs(dy)
-            }
-        }
-
-    }
-
-    private func focusNearest(_ direction: FocusDirection) {
-        guard !terminalManager.windows.isEmpty else { return }
-        let current = canvasView.activeTerminal
-        let origin = current?.frame.center ?? canvasView.viewport.screenToWorld(
-            CGPoint(x: canvasView.bounds.midX, y: canvasView.bounds.midY))
-        let candidates = terminalManager.windows.filter {
-            $0 !== current && direction.contains($0.frame.center, relativeTo: origin)
-        }
-        guard let nearest = candidates.min(by: {
-            let da = hypot($0.frame.center.x - origin.x, $0.frame.center.y - origin.y)
-            let db = hypot($1.frame.center.x - origin.x, $1.frame.center.y - origin.y)
-            return da < db
-        }) else { return }
-        snapViewportToTerminal(nearest)
-    }
-
-    private func snapViewportToTerminal(_ tw: TerminalWindowView) {
-        canvasView.activateTerminal(tw)
-        tw.focusTerminal()
-        let center = CGPoint(x: tw.frame.midX, y: tw.frame.midY)
-        var vp = canvasView.viewport
-        vp.panX = -center.x * vp.zoom + canvasView.bounds.width / 2
-        vp.panY = -center.y * vp.zoom + canvasView.bounds.height / 2
-        canvasView.setViewport(vp)
-    }
+    @objc func closeActiveTerminal() { terminalController.closeActive() }
+    @objc func focusTerminalLeft()   { terminalController.focusNearest(.left)  }
+    @objc func focusTerminalRight()  { terminalController.focusNearest(.right) }
+    @objc func focusTerminalUp()     { terminalController.focusNearest(.up)    }
+    @objc func focusTerminalDown()   { terminalController.focusNearest(.down)  }
 
     @objc func resetZoom() {
         let center = CGPoint(x: canvasView.bounds.midX, y: canvasView.bounds.midY)
@@ -973,7 +774,7 @@ final class CanvasViewController: NSViewController {
     }
 
     @objc func fitAll() {
-        let windows = terminalManager.windows
+        let windows = terminalController.windows
         guard !windows.isEmpty else { return }
 
         let union = windows.map(\.frame).reduce(windows[0].frame) { $0.union($1) }
@@ -996,32 +797,18 @@ final class CanvasViewController: NSViewController {
 
 extension CanvasViewController {
 
-    /// Pan and activate the first terminal whose working directory matches `path`.
-    /// - Returns: `true` if a terminal was found and focused.
+    /// Pan to and activate the first terminal whose working directory matches `path`.
     @discardableResult
     func focusTerminalInDirectory(_ path: String) -> Bool {
-        let target = URL(fileURLWithPath: path, isDirectory: true).standardized
-        guard let match = terminalManager.windows.first(where: {
-            URL(fileURLWithPath: $0.currentCwd, isDirectory: true).standardized == target
-        }) else { return false }
-        snapViewportToTerminal(match)
+        guard terminalController.focusTerminalInDirectory(path) else { return false }
+        view.window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
         return true
     }
 
-    /// Spawn a new terminal, optionally at `path`, centered in the current viewport.
-    func openTerminalViaScript(at path: String?) {
-        let center = canvasView.viewport.screenToWorld(
-            CGPoint(x: canvasView.bounds.midX, y: canvasView.bounds.midY))
-        spawnTerminal(at: center, cwd: path)
-    }
-
-    /// Working directory of the active terminal, or empty string if none is focused.
-    var activeTerminalWorkingDirectory: String {
-        canvasView.activeTerminal?.currentCwd ?? ""
-    }
-
-    /// Number of open terminals on the canvas.
-    var terminalCount: Int { terminalManager.windows.count }
+    func openTerminalViaScript(at path: String?) { terminalController.openViaScript(at: path) }
+    var activeTerminalWorkingDirectory: String    { terminalController.activeWorkingDirectory }
+    var terminalCount: Int                        { terminalController.count }
 }
 
 // MARK: - Undo / Redo
@@ -1049,7 +836,7 @@ extension CanvasViewController: NSMenuItemValidation {
             menuItem.state = (themes[menuItem.tag].id == currentTheme.id) ? .on : .off
         }
         if menuItem.action == #selector(toggleBroadcast) {
-            menuItem.state = broadcastMode ? .on : .off
+            menuItem.state = terminalController.broadcastMode ? .on : .off
         }
         if menuItem.action == #selector(toggleSnapping) {
             menuItem.state = toolPalette.snappingEnabled ? .on : .off
