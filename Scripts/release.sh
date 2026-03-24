@@ -34,7 +34,8 @@ for cmd in xcodegen xcodebuild xcrun hdiutil gh git; do
     command -v "$cmd" &>/dev/null || { echo "error: $cmd not found"; exit 1; }
 done
 
-if ! security find-identity -v -p codesigning 2>/dev/null | grep -q "Developer ID Application"; then
+IDENTITIES=$(security find-identity -v -p codesigning 2>/dev/null)
+if [[ "$IDENTITIES" != *"Developer ID Application"* ]]; then
     echo "error: no 'Developer ID Application' certificate found in keychain"
     exit 1
 fi
