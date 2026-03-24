@@ -71,6 +71,7 @@ xcodebuild archive \
     -configuration Release \
     -archivePath "$ARCHIVE" \
     "${SIGN_ARGS[@]}" \
+    -IDEPackageSupportDisableManifestSandbox=1 \
     -quiet
 
 # ── Export ────────────────────────────────────────────────────────────────────
@@ -101,6 +102,7 @@ xcodebuild -exportArchive \
     -archivePath "$ARCHIVE" \
     -exportPath "$EXPORT_DIR" \
     -exportOptionsPlist "$EXPORT_OPTIONS" \
+    -IDEPackageSupportDisableManifestSandbox=1 \
     -quiet
 
 # ── DMG ───────────────────────────────────────────────────────────────────────

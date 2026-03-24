@@ -20,7 +20,13 @@ xcodebuild test -scheme MosaicTests -destination 'platform=macOS' -IDEPackageSup
 open Mosaic.xcodeproj
 ```
 
-> **Note:** `-IDEPackageSupportDisableManifestSandbox=1` is required when running xcodebuild from a shell where `sandbox-exec` is blocked at the kernel level (e.g. inside Claude Code).
+> **Note:** `-IDEPackageSupportDisableManifestSandbox=1` is required when running xcodebuild from a shell where `sandbox-exec` is blocked at the kernel level (e.g. inside Claude Code / ziplock).
+>
+> **ziplock one-time setup:** If running Claude Code under [ziplock](https://github.com/thejefflarson/ziplock), run this once on the host to suppress Xcode's own Package.swift manifest sandbox:
+> ```bash
+> defaults write com.apple.dt.Xcode IDEPackageSupportDisableManifestSandbox -bool YES
+> ```
+> ziplock sets `XBS_DISABLE_SANDBOXED_BUILDS=1` and `SWIFTPM_SANDBOX=0` automatically. The release script already passes `-IDEPackageSupportDisableManifestSandbox=1` to both xcodebuild invocations.
 
 ## Project structure
 
