@@ -3,11 +3,8 @@ import AppKit
 // MARK: - navigate to "/path"
 //
 //   tell application "Mosaic"
-//       navigate to "/Users/jeff/myproject"
+//       navigate to "/Users/jeff/myproject"   -- returns true/false
 //   end tell
-//
-// Pans the canvas to the first terminal whose cwd matches and makes it active.
-// Returns true on success, false if no match is found.
 
 @objc(FocusTerminalCommand)
 final class FocusTerminalCommand: NSScriptCommand {
@@ -45,21 +42,31 @@ final class OpenTerminalCommand: NSScriptCommand {
     }
 }
 
-// MARK: - Application-level scripting properties
+// MARK: - count terminals
 //
-//   tell application "Mosaic" to get working directory
-//   tell application "Mosaic" to get terminal count
+//   tell application "Mosaic" to count terminals   -- returns integer
 
-extension NSApplication {
-    /// KVC key "workingDirectory" — maps to SDEF property code WkDr.
-    @objc var workingDirectory: String {
-        (delegate as? AppDelegate)?.canvasViewController?
-            .activeTerminalWorkingDirectory ?? ""
+@objc(CountTerminalsCommand)
+final class CountTerminalsCommand: NSScriptCommand {
+    override func performDefaultImplementation() -> Any? {
+        let count = MainActor.assumeIsolated {
+            (NSApp.delegate as? AppDelegate)?.canvasViewController?.terminalCount ?? 0
+        }
+        return count as NSNumber
     }
+}
 
-    /// KVC key "terminalCount" — maps to SDEF property code TmCt.
-    @objc var terminalCount: Int {
-        (delegate as? AppDelegate)?.canvasViewController?
-            .terminalCount ?? 0
+// MARK: - cwd
+//
+//   tell application "Mosaic" to cwd   -- returns path string
+
+@objc(CwdCommand)
+final class CwdCommand: NSScriptCommand {
+    override func performDefaultImplementation() -> Any? {
+        let dir: String = MainActor.assumeIsolated {
+            (NSApp.delegate as? AppDelegate)?.canvasViewController?
+                .activeTerminalWorkingDirectory ?? ""
+        }
+        return dir
     }
 }

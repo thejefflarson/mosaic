@@ -9,6 +9,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupMenuBar()
         openMainWindow()
+        // Retain scripting command classes so the linker doesn't dead-strip them.
+        // NSScriptCommand subclasses are instantiated by class name at runtime
+        // (from the SDEF) so Swift sees no direct references.
+        _ = FocusTerminalCommand.self
+        _ = OpenTerminalCommand.self
+        _ = CountTerminalsCommand.self
+        _ = CwdCommand.self
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -113,6 +120,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         editMenu.addItem(withTitle: "Copy",       action: #selector(NSText.copy(_:)),      keyEquivalent: "c")
         editMenu.addItem(withTitle: "Paste",      action: #selector(NSText.paste(_:)),     keyEquivalent: "v")
         editMenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        editMenu.addItem(NSMenuItem.separator())
+        let broadcastItem = NSMenuItem(title: "Broadcast Mode",
+                                       action: #selector(CanvasViewController.toggleBroadcast),
+                                       keyEquivalent: "b")
+        broadcastItem.keyEquivalentModifierMask = [.command, .shift]
+        editMenu.addItem(broadcastItem)
 
         // ── View menu ─────────────────────────────────────────────────────────
         let viewMenuItem = NSMenuItem(title: "View", action: nil, keyEquivalent: "")
@@ -130,11 +143,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         viewMenu.addItem(withTitle: "Snap to Alignment",
                          action: #selector(CanvasViewController.toggleSnapping),
                          keyEquivalent: "")
-        let broadcastItem = NSMenuItem(title: "Broadcast Mode",
-                                       action: #selector(CanvasViewController.toggleBroadcast),
-                                       keyEquivalent: "b")
-        broadcastItem.keyEquivalentModifierMask = [.command, .shift]
-        viewMenu.addItem(broadcastItem)
         viewMenu.addItem(withTitle: "Show FPS",
                          action: #selector(CanvasViewController.toggleFPSOverlay),
                          keyEquivalent: "")

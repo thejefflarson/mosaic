@@ -30,6 +30,8 @@
 	<string>NSApplication</string>
 	<key>NSSupportsAutomaticGraphicsSwitching</key>
 	<true/>
+	<key>NSAppleScriptEnabled</key>
+	<true/>
 	<key>OSAScriptingDefinition</key>
 	<string>Mosaic.sdef</string>
 </dict>

@@ -1,16 +1,19 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE dictionary SYSTEM "file://localhost/System/Library/DTDs/sdef.dtd">
-<dictionary title="Mosaic Terminology">
+<dictionary title="Mosaic Terminology"
+             xmlns:xi="http://www.w3.org/2001/XInclude">
+
+  <xi:include href="file:///System/Library/ScriptingDefinitions/CocoaStandard.sdef" xpointer="xpointer(/dictionary/suite)"/>
 
   <suite name="Mosaic Suite" code="Mosa"
          description="Commands and properties for controlling the Mosaic canvas.">
 
     <!-- navigate to "/path/to/dir"
-         Returns true if a matching terminal was found and focused. -->
+         Returns true if a matching terminal was found, false otherwise. -->
     <command name="navigate to" code="MosaFcTm"
              description="Pan the canvas to the first terminal whose working directory matches the given path and make it active.">
       <cocoa class="FocusTerminalCommand"/>
-      <direct-parameter description="The directory path to match." type="text"/>
+      <direct-parameter description="The directory path to match (tilde-expanded)." type="text"/>
       <result description="True if a matching terminal was found." type="boolean"/>
     </command>
 
@@ -21,19 +24,19 @@
       <parameter name="at" code="MsAt" description="Working directory for the new terminal. Defaults to home." type="text" optional="yes"/>
     </command>
 
-    <!-- Properties on the application object -->
-    <class-extension extends="application"
-                     description="Mosaic additions to the standard application class.">
+    <!-- count terminals  →  integer -->
+    <command name="count terminals" code="MosaTmCt"
+             description="Return the number of open terminals on the canvas.">
+      <cocoa class="CountTerminalsCommand"/>
+      <result description="Number of open terminals." type="integer"/>
+    </command>
 
-      <property name="working directory" code="WkDr"
-                description="Working directory of the currently focused terminal. Empty string if no terminal is active."
-                type="text" access="r"/>
-
-      <property name="terminal count" code="TmCt"
-                description="The number of open terminals on the canvas."
-                type="integer" access="r"/>
-
-    </class-extension>
+    <!-- cwd  →  text -->
+    <command name="cwd" code="MosaWkDr"
+             description="Return the working directory of the currently focused terminal, or empty string if none.">
+      <cocoa class="CwdCommand"/>
+      <result description="Working directory path." type="text"/>
+    </command>
 
   </suite>
 

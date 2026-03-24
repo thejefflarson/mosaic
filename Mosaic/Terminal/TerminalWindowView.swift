@@ -90,6 +90,7 @@ final class TerminalWindowView: NSView {
     var isActive: Bool = false {
         didSet { updateBorder() }
     }
+    var isBroadcast: Bool = false
 
     private func updateBorder() {
         let dark = theme.terminalBackground.isPerceivedDark
@@ -327,7 +328,11 @@ final class TerminalWindowView: NSView {
     }
 
     private func syncTitleBarColor() {
-        titleBar.applyTheme(background: theme.terminalBackground, foreground: theme.terminalForeground)
+        if isBroadcast {
+            titleBar.layer?.backgroundColor = NSColor(red: 0.15, green: 0.3, blue: 0.15, alpha: 1).cgColor
+        } else {
+            titleBar.applyTheme(background: theme.terminalBackground, foreground: theme.terminalForeground)
+        }
     }
 
     // MARK: - Resize handles
@@ -431,11 +436,8 @@ final class TerminalWindowView: NSView {
     // MARK: - Visual state
 
     func setBroadcastHighlight(_ on: Bool) {
-        if on {
-            titleBar.layer?.backgroundColor = NSColor(red: 0.15, green: 0.3, blue: 0.15, alpha: 1).cgColor
-        } else {
-            syncTitleBarColor()
-        }
+        isBroadcast = on
+        syncTitleBarColor()
     }
 
     func terminate() {
