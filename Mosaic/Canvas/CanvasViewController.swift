@@ -841,6 +841,9 @@ extension CanvasViewController: NSMenuItemValidation {
         if menuItem.action == #selector(toggleSnapping) {
             menuItem.state = toolPalette.snappingEnabled ? .on : .off
         }
+        if menuItem.action == #selector(toggleFPSOverlay) {
+            menuItem.state = fpsLabel.isHidden ? .off : .on
+        }
         return true
     }
 }
