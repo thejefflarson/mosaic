@@ -35,6 +35,7 @@ targets:
         LSMinimumSystemVersion: "14.0"
         NSHighResolutionCapable: true
         NSSupportsAutomaticGraphicsSwitching: true
+        NSAppleScriptEnabled: true
     settings:
       base:
         SWIFT_VERSION: "6.0"
