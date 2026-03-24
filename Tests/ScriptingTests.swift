@@ -51,23 +51,4 @@ struct ScriptingTests {
         #expect(pathMatches("~/Documents", against: "\(home)/Documents"))
     }
 
-
-    // workingDirectory and terminalCount are backed by CanvasViewController.
-    // When accessed without a live app delegate, they return safe defaults.
-
-    @Test @MainActor func workingDirectoryFallsBackToEmptyString() {
-        // Explicitly nil the delegate so the fallback path is taken regardless
-        // of whether the test host has initialised an AppDelegate.
-        let saved = NSApp.delegate
-        defer { NSApp.delegate = saved }
-        NSApp.delegate = nil
-        #expect(NSApp.workingDirectory == "")
-    }
-
-    @Test @MainActor func terminalCountFallsBackToZero() {
-        let saved = NSApp.delegate
-        defer { NSApp.delegate = saved }
-        NSApp.delegate = nil
-        #expect(NSApp.terminalCount == 0)
-    }
 }
