@@ -228,6 +228,7 @@ final class CanvasViewController: NSViewController {
             } else if !selectedTerminalIDs.contains(tw.id) {
                 clearSelection()
             }
+            updateMinimap()
         }
 
         canvasView.onAnnotationPressed = { [weak self] av, isShift in
@@ -720,7 +721,7 @@ final class CanvasViewController: NSViewController {
     }
 
     private func updateMinimap() {
-        minimapView.update(viewport: canvasView.viewport, windows: terminalController.windows,
+        minimapView.update(viewport: canvasView.viewport, windows: canvasView.terminalsInZOrder,
                            annotations: annotationController.annotations,
                            focusedWindow: canvasView.activeTerminal)
     }

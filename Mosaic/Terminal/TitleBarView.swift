@@ -84,9 +84,13 @@ final class TitleBarView: NSView {
         guard hovering != isHoveringClose else { return }
         isHoveringClose = hovering
         if hovering {
+            let para = NSMutableParagraphStyle()
+            para.alignment = .center
             let attrs: [NSAttributedString.Key: Any] = [
                 .font: NSFont.systemFont(ofSize: 9, weight: .bold),
                 .foregroundColor: NSColor(white: 0.15, alpha: 0.9),
+                .paragraphStyle: para,
+                .baselineOffset: 0.5,
             ]
             closeButton.attributedTitle = NSAttributedString(string: "✕", attributes: attrs)
         } else {

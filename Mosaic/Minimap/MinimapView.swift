@@ -1,9 +1,7 @@
 import AppKit
-import CoreVideo
-import os
 
-/// A fixed overlay that renders a bird's-eye view of the entire canvas at ~60 fps,
-/// synchronized to display frame boundaries via CVDisplayLink.
+/// A fixed overlay that renders a bird's-eye view of the entire canvas,
+/// updated synchronously whenever the canvas state changes.
 final class MinimapView: NSView {
     override var isFlipped: Bool { true }
 
@@ -11,11 +9,7 @@ final class MinimapView: NSView {
     weak var canvasView: CanvasView?
 
     private var snapshot: NSImage?
-    private var displayLink: CVDisplayLink?
-
-    /// Guards `isDirty` and `renderPending`, which are written from the CVDisplayLink
-    /// callback thread and read/written from the main thread.
-    private let renderFlags = OSAllocatedUnfairLock(initialState: (isDirty: false, renderPending: false))
+    private var renderPending = false
 
     // Updated by update(), consumed by renderSnapshot()
     private var terminalWindows: [TerminalWindowView] = []
@@ -46,46 +40,6 @@ final class MinimapView: NSView {
         layer?.borderWidth = 1
     }
 
-    // MARK: - Display link
-
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        if window != nil { startDisplayLink() } else { stopDisplayLink() }
-    }
-
-    private func startDisplayLink() {
-        guard displayLink == nil else { return }
-        CVDisplayLinkCreateWithActiveCGDisplays(&displayLink)
-        guard let link = displayLink else { return }
-
-        CVDisplayLinkSetOutputCallback(link, { _, _, _, _, _, ctx -> CVReturn in
-            guard let ctx else { return kCVReturnSuccess }
-            let view = Unmanaged<MinimapView>.fromOpaque(ctx).takeUnretainedValue()
-            // Check and update flags atomically to avoid a data race with the main thread.
-            let shouldRender = view.renderFlags.withLock { state -> Bool in
-                guard state.isDirty, !state.renderPending else { return false }
-                state.isDirty = false
-                state.renderPending = true
-                return true
-            }
-            guard shouldRender else { return kCVReturnSuccess }
-            DispatchQueue.main.async {
-                view.renderSnapshot()
-                view.needsDisplay = true
-                view.renderFlags.withLock { $0.renderPending = false }
-            }
-            return kCVReturnSuccess
-        }, Unmanaged.passUnretained(self).toOpaque())
-
-        CVDisplayLinkStart(link)
-    }
-
-    private func stopDisplayLink() {
-        guard let link = displayLink else { return }
-        CVDisplayLinkStop(link)
-        displayLink = nil
-    }
-
     // MARK: - Update
 
     func update(viewport: Viewport, windows: [TerminalWindowView], annotations: [AnnotationView] = [],
@@ -94,7 +48,13 @@ final class MinimapView: NSView {
         terminalWindows = windows
         annotationViews = annotations
         focusedWindowID = focusedWindow?.id
-        renderFlags.withLock { $0.isDirty = true }
+        guard !renderPending else { return }
+        renderPending = true
+        DispatchQueue.main.async { [weak self] in
+            self?.renderSnapshot()
+            self?.needsDisplay = true
+            self?.renderPending = false
+        }
     }
 
     // MARK: - Rendering
@@ -182,14 +142,13 @@ final class MinimapView: NSView {
                 let dotY = dest.minY + dotD * 0.8
                 NSColor(red: 0.9, green: 0.3, blue: 0.3, alpha: 0.9).setFill()
                 NSBezierPath(ovalIn: NSRect(x: dotX, y: dotY, width: dotD, height: dotD)).fill()
-                // Border — high-contrast for focused terminal (matches canvas), subtle otherwise
+                // Border — brighter for focused terminal, subtle otherwise (same thickness)
+                bodyPath.lineWidth = 0.5
                 if wf.isActive {
                     let dark = wf.bgColor.isPerceivedDark
-                    NSColor(white: dark ? 0.75 : 0.2, alpha: 1).setStroke()
-                    bodyPath.lineWidth = 2.0
+                    NSColor(white: dark ? 1.0 : 0.0, alpha: 0.9).setStroke()
                 } else {
                     wf.fgColor.withAlphaComponent(0.2).setStroke()
-                    bodyPath.lineWidth = 0.5
                 }
                 bodyPath.stroke()
             }

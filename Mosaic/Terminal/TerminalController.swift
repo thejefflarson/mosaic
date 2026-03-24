@@ -222,7 +222,7 @@ final class TerminalController {
 
     private func broadcastKey(_ data: Data, excluding source: TerminalWindowView) {
         guard broadcastMode else { return }
-        manager.windows.filter { $0 !== source }.forEach { $0.sendInput(data) }
+        manager.windows.filter { $0 !== source && $0.shellReady }.forEach { $0.sendInput(data) }
     }
 
     // MARK: - Navigation

@@ -302,6 +302,11 @@ final class CanvasView: NSView {
         worldView.addSubview(tw)
     }
 
+    /// Terminals in their current z-order (bottom to top), matching visual stacking.
+    var terminalsInZOrder: [TerminalWindowView] {
+        worldView.subviews.compactMap { $0 as? TerminalWindowView }
+    }
+
     /// Adds an annotation below all terminal windows.
     func addAnnotation(_ av: AnnotationView) {
         av.canvasView = self
