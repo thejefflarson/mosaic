@@ -52,6 +52,15 @@ fi
 
 echo "releasing $APP_NAME $VERSION"
 
+# ── Tests ─────────────────────────────────────────────────────────────────────
+
+echo "→ running tests"
+xcodebuild test \
+    -scheme MosaicTests \
+    -destination 'platform=macOS' \
+    -IDEPackageSupportDisableManifestSandbox=1 \
+    -quiet
+
 # ── Generate & archive ────────────────────────────────────────────────────────
 
 cd "$REPO_ROOT"

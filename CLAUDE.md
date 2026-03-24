@@ -64,6 +64,14 @@ SwiftTerm via SPM: `https://github.com/migueldeicaza/SwiftTerm.git` (branch: mai
 
 Saves to `~/Library/Application Support/Mosaic/workspace.json` on a 5-second debounce after any change. Restores layout and working directories on launch. Terminal session content is not persisted (PTYs are always fresh).
 
+## Before pushing
+
+Always run tests before pushing to avoid breaking CI:
+
+```bash
+xcodebuild test -scheme MosaicTests -destination 'platform=macOS' -IDEPackageSupportDisableManifestSandbox=1
+```
+
 ## Release
 
 ```bash
