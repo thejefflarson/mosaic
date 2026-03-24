@@ -11,6 +11,30 @@ packages:
     url: https://github.com/migueldeicaza/SwiftTerm.git
     revision: 3c45fdcfcf4395c72d2a4ee23c0bce79017b5391
 
+schemes:
+  Mosaic:
+    build:
+      targets:
+        Mosaic: all
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - MosaicTests
+    profile:
+      config: Release
+    archive:
+      config: Release
+  MosaicTests:
+    build:
+      targets:
+        MosaicTests: all
+    test:
+      config: Debug
+      targets:
+        - MosaicTests
+
 targets:
   Mosaic:
     type: application
