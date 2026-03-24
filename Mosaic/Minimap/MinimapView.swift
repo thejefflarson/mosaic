@@ -182,10 +182,11 @@ final class MinimapView: NSView {
                 let dotY = dest.minY + dotD * 0.8
                 NSColor(red: 0.9, green: 0.3, blue: 0.3, alpha: 0.9).setFill()
                 NSBezierPath(ovalIn: NSRect(x: dotX, y: dotY, width: dotD, height: dotD)).fill()
-                // Border — bright blue for the focused terminal, subtle otherwise
+                // Border — high-contrast for focused terminal (matches canvas), subtle otherwise
                 if wf.isActive {
-                    NSColor.systemBlue.setStroke()
-                    bodyPath.lineWidth = 1.5
+                    let dark = wf.bgColor.isPerceivedDark
+                    NSColor(white: dark ? 0.75 : 0.2, alpha: 1).setStroke()
+                    bodyPath.lineWidth = 2.0
                 } else {
                     wf.fgColor.withAlphaComponent(0.2).setStroke()
                     bodyPath.lineWidth = 0.5
