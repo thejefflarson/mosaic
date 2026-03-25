@@ -18,7 +18,7 @@ set -euo pipefail
 
 VERSION="${1:?Usage: $0 <version tag>  e.g. $0 v0.2.0}"
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-BUILD_DIR="$(mktemp -d)"
+BUILD_DIR="$(mktemp -d /tmp/mosaic-release.XXXXXX)"
 NOTARYTOOL_PROFILE="${NOTARYTOOL_PROFILE:-MosaicNotarization}"
 DEVELOPMENT_TEAM="${DEVELOPMENT_TEAM:-2PR729W8E3}"
 APP_NAME="Mosaic"
