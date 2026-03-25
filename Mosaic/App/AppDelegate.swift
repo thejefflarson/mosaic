@@ -147,6 +147,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                          action: #selector(CanvasViewController.toggleFPSOverlay),
                          keyEquivalent: "")
         viewMenu.addItem(NSMenuItem.separator())
+        viewMenu.addItem(withTitle: "Clear Scrollback",
+                         action: #selector(CanvasViewController.clearActiveTerminalScrollback),
+                         keyEquivalent: "k")
+        viewMenu.addItem(NSMenuItem.separator())
         viewMenu.addItem(withTitle: "Edit Theme…",
                          action: #selector(CanvasViewController.openThemeEditor),
                          keyEquivalent: "")

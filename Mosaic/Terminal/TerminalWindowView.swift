@@ -36,14 +36,11 @@ final class InterceptingTerminalView: LocalProcessTerminalView {
         onSendData?(data)
     }
 
-    /// SwiftTerm clears selection on every linefeed when allowMouseReporting=true,
-    /// even when no app has actually requested mouse tracking. Only call super
-    /// (which clears selection) when mouse tracking is genuinely active.
-    override func linefeed(source: Terminal) {
-        if source.mouseMode != .off {
-            super.linefeed(source: source)
-        }
-    }
+    /// SwiftTerm's default linefeed clears selection on every output line, making it
+    /// impossible to select text while the terminal is streaming output. Don't propagate —
+    /// selection is cleared appropriately by keyDown and mouseDown instead.
+    override func linefeed(source: Terminal) {}
+
 }
 
 private let titleBarHeight: CGFloat = 28
@@ -92,6 +89,9 @@ final class TerminalWindowView: NSView {
     // back to the main thread internally.
     private nonisolated(unsafe) var termView: InterceptingTerminalView!
     private var frameBeforeDrag: CGRect = .zero
+    private nonisolated(unsafe) var kittyArrowMonitor: Any?
+    private nonisolated(unsafe) var flagsMonitor: Any?
+    private var linkCursorPushed = false
 
     // MARK: - Canvas reference (for zoom-corrected drag)
 
@@ -110,6 +110,11 @@ final class TerminalWindowView: NSView {
     }
 
     required init?(coder: NSCoder) { fatalError() }
+
+    deinit {
+        if let monitor = kittyArrowMonitor { NSEvent.removeMonitor(monitor) }
+        if let monitor = flagsMonitor { NSEvent.removeMonitor(monitor) }
+    }
 
     // MARK: - Focus state
 
@@ -209,6 +214,45 @@ final class TerminalWindowView: NSView {
         // regardless of the system-wide appearance setting.
         termView.appearance = NSAppearance(named: .darkAqua)
 
+        // Fix SwiftTerm/macOS interaction: macOS always sets .numericPad on cursor arrow
+        // keys. In kitty keyboard mode SwiftTerm uses that flag to distinguish keypad
+        // arrows from cursor arrows — causing cursor arrows to be sent as CSI 57419u/57420u
+        // (keypad) instead of CSI A/B (cursor). Strip .numericPad so SwiftTerm takes the
+        // cursor-arrow path. We can't override keyDown (not open), so we use a local monitor.
+        //
+        // TODO(2026-04-08): Re-evaluate whether this is still needed. Introduced as a
+        // workaround for a Claude Code v2.1.83 regression ("Fixed mouse tracking escape
+        // sequences leaking to shell prompt after exit") that caused kitty keyboard mode
+        // to be pushed to terminals not in the kitty allow-list. If CC has been fixed,
+        // remove this monitor.
+        kittyArrowMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self,
+                  self.window?.firstResponder === self.termView,
+                  !self.termView.terminal.keyboardEnhancementFlags.isEmpty,
+                  event.modifierFlags.contains(.numericPad),
+                  let cgOrig = event.cgEvent,
+                  let cgCopy = cgOrig.copy() else { return event }
+            cgCopy.flags = cgCopy.flags.subtracting(.maskNumericPad)
+            return NSEvent(cgEvent: cgCopy) ?? event
+        }
+
+        // Show a pointing-hand cursor when Cmd is held — matches SwiftTerm's link-underline
+        // behaviour. cursorUpdate(with:) is public (not open) in SwiftTerm so we can't
+        // override it; use a flagsChanged monitor instead.
+        flagsMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
+            guard let self else { return event }
+            let cmdHeld = event.modifierFlags.contains(.command)
+            let overTerminal = self.window?.firstResponder === self.termView
+            if cmdHeld && overTerminal && !self.linkCursorPushed {
+                NSCursor.pointingHand.push()
+                self.linkCursorPushed = true
+            } else if (!cmdHeld || !overTerminal) && self.linkCursorPushed {
+                NSCursor.pop()
+                self.linkCursorPushed = false
+            }
+            return event
+        }
+
         startProcess()
     }
 
@@ -237,6 +281,17 @@ final class TerminalWindowView: NSView {
         return lines.joined(separator: "\r\n")
     }
 
+    /// Clear scrollback and screen (Cmd+K behaviour). Feeds ESC sequences directly
+    /// to the terminal display — does not send anything to the PTY.
+    func clearScrollback() {
+        // ESC[H  = cursor home
+        // ESC[2J = erase screen
+        // ESC[3J = erase saved lines (scrollback)
+        termView.feed(byteArray: [0x1B, 0x5B, 0x48,
+                                  0x1B, 0x5B, 0x32, 0x4A,
+                                  0x1B, 0x5B, 0x33, 0x4A])
+    }
+
     private func startProcess() {
         let settings = TerminalSettings.shared
         applyTerminalSettings(settings)
@@ -244,9 +299,6 @@ final class TerminalWindowView: NSView {
         var env = ProcessInfo.processInfo.environment
         env["TERM"] = "xterm-256color"
         env["COLORTERM"] = "truecolor"
-        if env["TERM_PROGRAM"] == nil {
-            env["TERM_PROGRAM"] = "Mosaic"
-        }
 
         var isDir: ObjCBool = false
         let cwdExists = FileManager.default.fileExists(atPath: currentCwd, isDirectory: &isDir) && isDir.boolValue

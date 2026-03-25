@@ -89,6 +89,17 @@ xcrun notarytool store-credentials "MosaicNotarization" \
   --password "xxxx-xxxx-xxxx-xxxx"   # app-specific password from appleid.apple.com
 ```
 
+## Known workarounds to revisit
+
+**Kitty keyboard arrow key fix (added 2026-03-25, revisit ~2026-04-08):** Claude Code v2.1.83
+introduced a regression ("Fixed mouse tracking escape sequences leaking to shell prompt after exit")
+that causes kitty keyboard mode to be pushed to all terminals, not just kitty-capable ones. SwiftTerm
+honours the push and incorrectly encodes macOS cursor arrow keys as keypad arrows (CSI 57419u/57420u)
+because macOS always sets the `.numericPad` flag on cursor arrow events. Workaround: a local
+`NSEvent` monitor in `TerminalWindowView.setupTerminal()` strips `.numericPad` from the CGEvent
+before SwiftTerm sees it. Once Claude Code fixes the regression, remove the monitor and its `deinit`
+cleanup (`kittyArrowMonitor`).
+
 ## Planned features (not yet implemented)
 
 - Minimap click/drag accuracy improvements
