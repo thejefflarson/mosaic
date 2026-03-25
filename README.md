@@ -9,6 +9,8 @@ An infinite 2D spatial canvas for macOS where real PTY-backed terminal windows c
 
 https://github.com/user-attachments/assets/6f503b39-5477-4ede-a528-04e4f09dc268
 
+**[Download the latest release](https://github.com/thejefflarson/mosaic/releases/latest)**
+
 
 ## What it does
 
