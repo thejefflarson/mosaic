@@ -10,6 +10,9 @@ packages:
   SwiftTerm:
     url: https://github.com/migueldeicaza/SwiftTerm.git
     revision: 3c45fdcfcf4395c72d2a4ee23c0bce79017b5391
+  Sparkle:
+    url: https://github.com/sparkle-project/Sparkle
+    from: 2.0.0
 
 schemes:
   Mosaic:
@@ -61,6 +64,9 @@ targets:
         NSSupportsAutomaticGraphicsSwitching: true
         NSAppleScriptEnabled: true
         LSApplicationCategoryType: public.app-category.productivity
+        SUFeedURL: https://raw.githubusercontent.com/thejefflarson/mosaic/main/appcast.xml
+        # Generate with: find ~/Library/Developer/Xcode/DerivedData -name generate_keys -path '*/Sparkle*/bin/*' | head -1
+        SUPublicEDKey: REPLACE_WITH_OUTPUT_OF_generate_keys
     settings:
       base:
         SWIFT_VERSION: "6.0"
@@ -73,6 +79,8 @@ targets:
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     dependencies:
       - package: SwiftTerm
+      - package: Sparkle
+        product: Sparkle
 
   MosaicTests:
     type: bundle.unit-test

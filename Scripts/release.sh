@@ -40,6 +40,14 @@ if [[ "$IDENTITIES" != *"Developer ID Application"* ]]; then
     exit 1
 fi
 
+if grep -q 'REPLACE_WITH_OUTPUT_OF_generate_keys' "$REPO_ROOT/project.yml"; then
+    echo "error: SUPublicEDKey not set in project.yml"
+    echo "  1. Build the project in Xcode to resolve Sparkle"
+    echo "  2. Run: \$(find ~/Library/Developer/Xcode/DerivedData -name generate_keys -path '*/Sparkle*/bin/*' | head -1)"
+    echo "  3. Replace REPLACE_WITH_OUTPUT_OF_generate_keys in project.yml with the printed key"
+    exit 1
+fi
+
 if git tag --list | grep -qxF "$VERSION"; then
     echo "error: tag $VERSION already exists locally"
     exit 1
@@ -137,6 +145,53 @@ xcrun notarytool submit "$DMG" \
 
 echo "→ stapling"
 xcrun stapler staple "$DMG"
+
+# ── Sign DMG for Sparkle & update appcast ─────────────────────────────────────
+
+echo "→ signing DMG for Sparkle"
+SIGN_UPDATE=$(command -v sign_update 2>/dev/null || \
+    find ~/Library/Developer/Xcode/DerivedData -name sign_update \
+         -path "*/Sparkle*/bin/*" 2>/dev/null | head -1)
+
+if [[ -z "${SIGN_UPDATE:-}" ]]; then
+    echo "warning: sign_update not found — skipping appcast update"
+    echo "  Build the project in Xcode once so Sparkle is resolved, then retry."
+else
+    SIG_OUTPUT=$("$SIGN_UPDATE" "$DMG")
+    ED_SIG=$(printf '%s' "$SIG_OUTPUT" | grep -o 'sparkle:edSignature="[^"]*"' | cut -d'"' -f2)
+    DMG_LENGTH=$(stat -f%z "$DMG")
+    SHORT_VERSION="${VERSION#v}"
+    DMG_FILENAME=$(basename "$DMG")
+    DOWNLOAD_URL="https://github.com/thejefflarson/mosaic/releases/download/${VERSION}/${DMG_FILENAME}"
+    PUB_DATE=$(date -u '+%a, %d %b %Y %H:%M:%S +0000')
+
+    python3 - "$REPO_ROOT/appcast.xml" \
+              "$SHORT_VERSION" "$DOWNLOAD_URL" \
+              "$ED_SIG" "$DMG_LENGTH" "$PUB_DATE" <<'PYEOF'
+import sys
+from pathlib import Path
+
+appcast, version, url, sig, length, pub_date = sys.argv[1:]
+item = f"""
+    <item>
+      <title>Mosaic {version}</title>
+      <pubDate>{pub_date}</pubDate>
+      <sparkle:version>{version}</sparkle:version>
+      <sparkle:shortVersionString>{version}</sparkle:shortVersionString>
+      <enclosure url="{url}"
+                 sparkle:edSignature="{sig}"
+                 length="{length}"
+                 type="application/octet-stream" />
+    </item>"""
+
+text = Path(appcast).read_text()
+text = text.replace('  </channel>', item + '\n  </channel>')
+Path(appcast).write_text(text)
+PYEOF
+
+    git -C "$REPO_ROOT" add appcast.xml
+    git -C "$REPO_ROOT" commit -m "appcast: add $VERSION"
+fi
 
 # ── Draft release notes ───────────────────────────────────────────────────────
 

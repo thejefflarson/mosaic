@@ -1,12 +1,16 @@
 import AppKit
+@preconcurrency import Sparkle
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var mainWindowController: NSWindowController?
     private var themeMenu: NSMenu?
     private(set) var canvasViewController: CanvasViewController?
+    private var updaterController: SPUStandardUpdaterController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        updaterController = SPUStandardUpdaterController(
+            startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
         setupMenuBar()
         openMainWindow()
         // Retain scripting command classes so the linker doesn't dead-strip them.
@@ -67,6 +71,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         appMenu.addItem(withTitle: "About Mosaic",
                         action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)),
                         keyEquivalent: "")
+        let checkForUpdatesItem = NSMenuItem(title: "Check for Updates…",
+                                             action: #selector(SPUStandardUpdaterController.checkForUpdates(_:)),
+                                             keyEquivalent: "")
+        checkForUpdatesItem.target = updaterController
+        appMenu.addItem(checkForUpdatesItem)
         appMenu.addItem(NSMenuItem.separator())
         appMenu.addItem(withTitle: "Terminal Settings…",
                         action: #selector(CanvasViewController.openTerminalSettings),
