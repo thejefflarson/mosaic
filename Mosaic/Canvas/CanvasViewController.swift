@@ -762,6 +762,7 @@ final class CanvasViewController: NSViewController {
     // MARK: - Window menu actions
 
     @objc func clearActiveTerminalScrollback() { canvasView.activeTerminal?.clearScrollback() }
+    @objc func performFindPanelAction(_ sender: Any?) { canvasView.activeTerminal?.performFind(sender) }
     @objc func closeActiveTerminal() { terminalController.closeActive() }
     @objc func focusTerminalLeft()   { terminalController.focusNearest(.left)  }
     @objc func focusTerminalRight()  { terminalController.focusNearest(.right) }

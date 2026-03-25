@@ -121,6 +121,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         editMenu.addItem(withTitle: "Paste",      action: #selector(NSText.paste(_:)),     keyEquivalent: "v")
         editMenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
         editMenu.addItem(NSMenuItem.separator())
+
+        // Find submenu — actions travel to the focused terminal view via responder chain
+        let findMenuItem = NSMenuItem(title: "Find", action: nil, keyEquivalent: "")
+        let findMenu = NSMenu(title: "Find")
+        let findPanelAction = #selector(CanvasViewController.performFindPanelAction(_:))
+        let findItem = NSMenuItem(title: "Find…", action: findPanelAction, keyEquivalent: "f")
+        findItem.tag = Int(NSFindPanelAction.showFindPanel.rawValue)
+        findMenu.addItem(findItem)
+        let findNextItem = NSMenuItem(title: "Find Next", action: findPanelAction, keyEquivalent: "g")
+        findNextItem.tag = Int(NSFindPanelAction.next.rawValue)
+        findMenu.addItem(findNextItem)
+        let findPrevItem = NSMenuItem(title: "Find Previous", action: findPanelAction, keyEquivalent: "g")
+        findPrevItem.keyEquivalentModifierMask = [.command, .shift]
+        findPrevItem.tag = Int(NSFindPanelAction.previous.rawValue)
+        findMenu.addItem(findPrevItem)
+        findMenuItem.submenu = findMenu
+        editMenu.addItem(findMenuItem)
+        editMenu.addItem(NSMenuItem.separator())
+
         let broadcastItem = NSMenuItem(title: "Broadcast Mode",
                                        action: #selector(CanvasViewController.toggleBroadcast),
                                        keyEquivalent: "b")
@@ -220,7 +239,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     // NSMenuDelegate — rebuild items every time the menu opens so tags stay correct.
+    // AppKit always calls menuNeedsUpdate on the main thread, so assumeIsolated is safe.
     nonisolated func menuNeedsUpdate(_ menu: NSMenu) {
-        Task { @MainActor in rebuildThemeMenuItems() }
+        MainActor.assumeIsolated { rebuildThemeMenuItems() }
     }
 }

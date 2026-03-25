@@ -688,6 +688,22 @@ final class ImageAnnotationView: AnnotationView {
             }
         }
 
+        if let snap = snapFrame {
+            let snapped = snap(r, edge)
+            let sdx = snapped.origin.x - r.origin.x
+            let sdy = snapped.origin.y - r.origin.y
+
+            let dragsRight  = edge == .right  || edge == .topRight   || edge == .bottomRight
+            let dragsLeft   = edge == .left   || edge == .topLeft    || edge == .bottomLeft
+            let dragsBottom = edge == .bottom || edge == .bottomLeft || edge == .bottomRight
+            let dragsTop    = edge == .top    || edge == .topLeft    || edge == .topRight
+
+            if dragsRight       { r.size.width  += sdx }
+            else if dragsLeft   { r.origin.x    += sdx; r.size.width  -= sdx }
+            if dragsBottom      { r.size.height += sdy }
+            else if dragsTop    { r.origin.y    += sdy; r.size.height -= sdy }
+        }
+
         frame = r
         onChanged?()
     }

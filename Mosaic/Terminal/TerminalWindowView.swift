@@ -281,6 +281,18 @@ final class TerminalWindowView: NSView {
         return lines.joined(separator: "\r\n")
     }
 
+    /// Forward a find-panel action to the SwiftTerm terminal view.
+    /// Pass a nil sender to default to "show find panel".
+    func performFind(_ sender: Any?) {
+        if let item = sender as? NSMenuItem {
+            termView.performFindPanelAction(item)
+        } else {
+            let item = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+            item.tag = Int(NSFindPanelAction.showFindPanel.rawValue)
+            termView.performFindPanelAction(item)
+        }
+    }
+
     /// Clear scrollback and screen (Cmd+K behaviour). Feeds ESC sequences directly
     /// to the terminal display — does not send anything to the PTY.
     func clearScrollback() {

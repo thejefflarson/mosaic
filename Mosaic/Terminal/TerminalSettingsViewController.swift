@@ -16,7 +16,7 @@ final class TerminalSettingsModel: ObservableObject {
     init() {
         let s = TerminalSettings.shared
         cursorStyle            = s.cursorStyle
-        scrollbackLines        = "\(s.scrollbackLines)"
+        scrollbackLines        = ""
         optionAsMetaKey        = s.optionAsMetaKey
         backspaceSendsControlH = s.backspaceSendsControlH
         allowMouseReporting    = s.allowMouseReporting
@@ -26,7 +26,7 @@ final class TerminalSettingsModel: ObservableObject {
     func buildSettings() -> TerminalSettings {
         var s = TerminalSettings()
         s.cursorStyle            = cursorStyle
-        s.scrollbackLines        = Int(scrollbackLines) ?? 500
+        s.scrollbackLines        = scrollbackLines.isEmpty ? TerminalSettings.shared.scrollbackLines : (Int(scrollbackLines) ?? 500)
         s.optionAsMetaKey        = optionAsMetaKey
         s.backspaceSendsControlH = backspaceSendsControlH
         s.allowMouseReporting    = allowMouseReporting
