@@ -84,13 +84,16 @@ final class MinimapView: NSView {
         // Terminals are drawn as simple boxes to avoid GPU contention with SwiftTerm's Metal renderer.
         var annotImages: [(frame: CGRect, image: NSImage)] = []
         for av in annotationViews {
-            guard !av.frame.isEmpty, let layer = av.layer else { continue }
+            guard !av.frame.isEmpty else { continue }
             let sz = av.bounds.size
             guard sz.width > 0, sz.height > 0 else { continue }
+            // cacheDisplay captures screen-space pixels (Y-down) correctly,
+            // unlike layer.render(in:) which renders in Y-up CA coordinates
+            // and produces a flipped/squished result in our flipped drawing context.
+            guard let bitmapRep = av.bitmapImageRepForCachingDisplay(in: av.bounds) else { continue }
+            av.cacheDisplay(in: av.bounds, to: bitmapRep)
             let img = NSImage(size: sz)
-            img.lockFocus()
-            if let ctx = NSGraphicsContext.current?.cgContext { layer.render(in: ctx) }
-            img.unlockFocus()
+            img.addRepresentation(bitmapRep)
             annotImages.append((av.frame, img))
         }
         let focusedID = focusedWindowID
@@ -120,7 +123,7 @@ final class MinimapView: NSView {
                     height: max(frame.height * scale, 2)
                 )
                 img.draw(in: dest, from: .zero, operation: .sourceOver,
-                         fraction: 1, respectFlipped: false, hints: nil)
+                         fraction: 1, respectFlipped: true, hints: nil)
             }
 
             // Terminal windows — themed body color with a small close dot, no title bar strip
