@@ -60,6 +60,7 @@ targets:
         NSHighResolutionCapable: true
         NSSupportsAutomaticGraphicsSwitching: true
         NSAppleScriptEnabled: true
+        LSApplicationCategoryType: public.app-category.productivity
     settings:
       base:
         SWIFT_VERSION: "6.0"
