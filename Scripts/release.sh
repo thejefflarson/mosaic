@@ -138,6 +138,27 @@ xcrun notarytool submit "$DMG" \
 echo "→ stapling"
 xcrun stapler staple "$DMG"
 
+# ── Draft release notes ───────────────────────────────────────────────────────
+
+echo "→ drafting release notes"
+PREV_TAG=$(git tag --sort=-version:refname | head -1)
+if [[ -n "$PREV_TAG" ]]; then
+    COMMIT_LOG=$(git log --oneline "${PREV_TAG}..HEAD")
+else
+    COMMIT_LOG=$(git log --oneline)
+fi
+
+RELEASE_NOTES_ARGS=(--generate-notes)
+if command -v claude &>/dev/null && [[ -n "$COMMIT_LOG" ]]; then
+    NOTES=$(claude -p "Write concise GitHub release notes for $APP_NAME $VERSION in markdown.
+Focus on what users will notice — new features, fixes, improvements — not implementation details.
+Use a short intro sentence, then bullet points (3–8 items). Do not use 'we' language. Be brief.
+
+Commits since ${PREV_TAG:-the beginning}:
+$COMMIT_LOG" 2>/dev/null) || true
+    [[ -n "${NOTES:-}" ]] && RELEASE_NOTES_ARGS=(--notes "$NOTES")
+fi
+
 # ── Tag & publish ─────────────────────────────────────────────────────────────
 
 echo "→ pushing main and tagging $VERSION"
@@ -148,6 +169,6 @@ git push origin "$VERSION"
 echo "→ creating GitHub release"
 gh release create "$VERSION" "$DMG" \
     --title "$APP_NAME $VERSION" \
-    --generate-notes
+    "${RELEASE_NOTES_ARGS[@]}"
 
 echo "done — $APP_NAME $VERSION released"
