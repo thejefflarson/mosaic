@@ -12,7 +12,10 @@ packages:
     revision: 3c45fdcfcf4395c72d2a4ee23c0bce79017b5391
   Sparkle:
     url: https://github.com/sparkle-project/Sparkle
-    from: 2.0.0
+    # upToNextMinor prevents picking up unexpected 2.x minor bumps.
+    # Preferred: pin to a specific revision like SwiftTerm — check the resolved
+    # version in Mosaic.xcodeproj after first build and replace with `revision: <hash>`.
+    upToNextMinor: 2.0.0
 
 schemes:
   Mosaic:

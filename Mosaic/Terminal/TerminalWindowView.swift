@@ -384,8 +384,12 @@ final class TerminalWindowView: NSView {
                 while let c = iter.next() {
                     if c.value >= 0x40 && c.value <= 0x7E { break }
                 }
-            case "]":
-                // OSC: consume until BEL (0x07) or ST (ESC \)
+            case "]",   // OSC  (Operating System Command)
+                 "P",   // DCS  (Device Control String)
+                 "X",   // SOS  (Start of String)
+                 "^",   // PM   (Privacy Message)
+                 "_":   // APC  (Application Program Command)
+                // All ST-terminated sequences: consume until BEL (0x07) or ST (ESC \)
                 var prev: Unicode.Scalar = "\u{00}"
                 while let c = iter.next() {
                     if c == "\u{07}" { break }
