@@ -7,5 +7,16 @@
     <link>https://github.com/thejefflarson/mosaic</link>
     <description>Mosaic changelog</description>
     <language>en</language>
+
+    <item>
+      <title>Mosaic 0.5.0</title>
+      <pubDate>Wed, 25 Mar 2026 08:46:32 +0000</pubDate>
+      <sparkle:version>0.5.0</sparkle:version>
+      <sparkle:shortVersionString>0.5.0</sparkle:shortVersionString>
+      <enclosure url="https://github.com/thejefflarson/mosaic/releases/download/v0.5.0/Mosaic-v0.5.0.dmg"
+                 sparkle:edSignature="Kf75AAvMP6M2mkBCGZt+7ULyCe36KSfLQGq2tSFI2rxBdyNmXh2o6WxyvNAxkzgSw3Ftx4m7eJ2/CCQwbjvuDg=="
+                 length="3574762"
+                 type="application/octet-stream" />
+    </item>
   </channel>
 </rss>
