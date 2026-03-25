@@ -36,5 +36,9 @@
 	<true/>
 	<key>OSAScriptingDefinition</key>
 	<string>Mosaic.sdef</string>
+	<key>SUFeedURL</key>
+	<string>https://raw.githubusercontent.com/thejefflarson/mosaic/main/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>zBk/+O7F6ZvuCdEM7p7FQ3VHdkOFkRbJhMbZGRjqP3U=</string>
 </dict>
 </plist>

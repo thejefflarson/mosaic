@@ -12,10 +12,7 @@ packages:
     revision: 3c45fdcfcf4395c72d2a4ee23c0bce79017b5391
   Sparkle:
     url: https://github.com/sparkle-project/Sparkle
-    # upToNextMinor prevents picking up unexpected 2.x minor bumps.
-    # Preferred: pin to a specific revision like SwiftTerm — check the resolved
-    # version in Mosaic.xcodeproj after first build and replace with `revision: <hash>`.
-    upToNextMinor: 2.0.0
+    revision: 21d8df80440b1ca3b65fa82e40782f1e5a9e6ba2
 
 schemes:
   Mosaic:
@@ -69,7 +66,7 @@ targets:
         LSApplicationCategoryType: public.app-category.productivity
         SUFeedURL: https://raw.githubusercontent.com/thejefflarson/mosaic/main/appcast.xml
         # Generate with: find ~/Library/Developer/Xcode/DerivedData -name generate_keys -path '*/Sparkle*/bin/*' | head -1
-        SUPublicEDKey: REPLACE_WITH_OUTPUT_OF_generate_keys
+        SUPublicEDKey: zBk/+O7F6ZvuCdEM7p7FQ3VHdkOFkRbJhMbZGRjqP3U=
     settings:
       base:
         SWIFT_VERSION: "6.0"
