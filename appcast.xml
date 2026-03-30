@@ -29,5 +29,16 @@
                  length="3580365"
                  type="application/octet-stream" />
     </item>
+
+    <item>
+      <title>Mosaic 0.5.2</title>
+      <pubDate>Mon, 30 Mar 2026 05:40:20 +0000</pubDate>
+      <sparkle:version>0.5.2</sparkle:version>
+      <sparkle:shortVersionString>0.5.2</sparkle:shortVersionString>
+      <enclosure url="https://github.com/thejefflarson/mosaic/releases/download/v0.5.2/Mosaic-v0.5.2.dmg"
+                 sparkle:edSignature="x4M/bh/4Q2TjLvEq028+ARFFC4sDLGl3UJHOA+BG/dC9JYoS0TBmvGkVruDIo77/JDfk1i9HdWCn/fjg6eH+Cw=="
+                 length="3584033"
+                 type="application/octet-stream" />
+    </item>
   </channel>
 </rss>
