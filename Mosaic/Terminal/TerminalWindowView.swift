@@ -170,8 +170,9 @@ final class TerminalWindowView: NSView {
             let proposed = CGRect(x: self.frame.origin.x + screenDX / zoom,
                                   y: self.frame.origin.y - screenDY / zoom,
                                   width: self.frame.width, height: self.frame.height)
+            let oldOrigin = self.frame.origin
             self.frame = self.snapFrame?(proposed, nil) ?? proposed
-            self.onDragDelta?(screenDX / zoom, -screenDY / zoom)
+            self.onDragDelta?(self.frame.origin.x - oldOrigin.x, self.frame.origin.y - oldOrigin.y)
             self.onMoved?()
         }
 
