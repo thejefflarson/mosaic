@@ -557,7 +557,36 @@ final class CanvasViewController: NSViewController {
         } else {
             movingX = nil; movingY = nil
         }
-        let snap = snapRect(proposed, to: others, threshold: threshold,
+
+        // For group drags, snap the outer bounding box of all selected items so
+        // alignment lines react to the group boundary, not the dragged element alone.
+        let isDraggingSelected = excludingTerminal.map { selectedTerminalIDs.contains($0.id) }
+            ?? excludingAnnotation.map { selectedAnnotationIDs.contains($0.annotationID) }
+            ?? false
+        let snapTarget: CGRect
+        if edge == nil,
+           isDraggingSelected,
+           selectedTerminalIDs.count + selectedAnnotationIDs.count > 1,
+           let currentFrame = excludingTerminal?.frame ?? excludingAnnotation?.frame {
+            let dx = proposed.minX - currentFrame.minX
+            let dy = proposed.minY - currentFrame.minY
+            let groupFrames = terminalController.windows
+                .filter { selectedTerminalIDs.contains($0.id) }
+                .map(\.frame)
+                + annotationController.annotations
+                .filter { selectedAnnotationIDs.contains($0.annotationID) }
+                .map(\.frame)
+            if !groupFrames.isEmpty {
+                let groupBBox = groupFrames.dropFirst().reduce(groupFrames[0]) { $0.union($1) }
+                snapTarget = groupBBox.offsetBy(dx: dx, dy: dy)
+            } else {
+                snapTarget = proposed
+            }
+        } else {
+            snapTarget = proposed
+        }
+
+        let snap = snapRect(snapTarget, to: others, threshold: threshold,
                             movingX: movingX, movingY: movingY)
 
         var guides: [(isVertical: Bool, pos: CGFloat)] = []
@@ -568,7 +597,12 @@ final class CanvasViewController: NSViewController {
             guides.append((false, canvasView.viewport.worldToScreen(CGPoint(x: 0, y: wy)).y))
         }
         snapOverlay.guides = guides
-        return snap.rect
+
+        // Apply the correction delta (from snapping snapTarget) to the proposed frame.
+        // For single-element drags snapTarget == proposed so this is equivalent to snap.rect.
+        let corrDX = snap.rect.minX - snapTarget.minX
+        let corrDY = snap.rect.minY - snapTarget.minY
+        return proposed.offsetBy(dx: corrDX, dy: corrDY)
     }
 
     @objc func toggleSnapping() {
