@@ -227,8 +227,19 @@ final class TerminalWindowView: NSView {
         // remove this monitor.
         kittyArrowMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self,
-                  self.window?.firstResponder === self.termView,
-                  !self.termView.terminal.keyboardEnhancementFlags.isEmpty,
+                  self.window?.firstResponder === self.termView else { return event }
+
+            // Shift+Enter: send \x1b[13;2u (kitty keyboard protocol Shift+Enter).
+            // Claude Code recognises this sequence natively (same as iTerm2/Ghostty).
+            // Must intercept unconditionally — SwiftTerm drops the Shift modifier when
+            // routing Return through doCommand(insertNewline:) regardless of kitty mode.
+            if event.keyCode == 36, event.modifierFlags.contains(.shift) {
+                self.termView.send(data: [0x1B, 0x5B, 0x31, 0x33, 0x3B, 0x32, 0x75][...])
+                return nil
+            }
+
+            // numericPad fix: only applies when kitty keyboard mode is active.
+            guard !self.termView.terminal.keyboardEnhancementFlags.isEmpty,
                   event.modifierFlags.contains(.numericPad),
                   let cgOrig = event.cgEvent,
                   let cgCopy = cgOrig.copy() else { return event }
@@ -265,14 +276,14 @@ final class TerminalWindowView: NSView {
         var row = -1
         while lines.count < maxLines {
             guard let line = t.getScrollInvariantLine(row: row) else { break }
-            lines.insert(line.translateToString(trimRight: true), at: 0)
+            lines.insert(line.translateToString(trimRight: false, characterProvider: { let c = $0.getCharacter(); return c == "\0" ? " " : c }), at: 0)
             row -= 1
         }
 
         // Visible screen lines
         for r in 0..<t.rows {
             if let line = t.getScrollInvariantLine(row: r) {
-                lines.append(line.translateToString(trimRight: true))
+                lines.append(line.translateToString(trimRight: false, characterProvider: { let c = $0.getCharacter(); return c == "\0" ? " " : c }))
             }
         }
 
@@ -359,7 +370,11 @@ final class TerminalWindowView: NSView {
                 // before re-feeding it. Without this, a tampered workspace.json could
                 // inject OSC sequences (e.g. OSC 8 hyperlinks, OSC 1337 file transfers,
                 // title-setting sequences) into the running terminal.
+                // NUL bytes (U+0000) arise from terminal cells that were never explicitly
+                // written (cursor-positioned TUI layouts). Replace them with spaces so they
+                // render correctly when re-fed to the terminal emulator.
                 let safe = TerminalWindowView.stripEscapeSequences(text)
+                    .replacingOccurrences(of: "\u{0000}", with: " ")
                 // Dim color + italic, then show saved content, then reset
                 let dimmed = "\u{1B}[2;3m" + safe + "\u{1B}[0m\r\n"
                 self.termView.feed(text: dimmed)
