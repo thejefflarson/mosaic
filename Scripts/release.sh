@@ -59,6 +59,15 @@ if git status --porcelain | grep -q .; then
 fi
 
 echo "releasing $APP_NAME $VERSION"
+SHORT_VERSION="${VERSION#v}"
+
+# ── Bump version in Info.plist ────────────────────────────────────────────────
+
+PLIST_PATH="$REPO_ROOT/Mosaic/Resources/Info.plist"
+echo "→ bumping CFBundleShortVersionString to $SHORT_VERSION"
+/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $SHORT_VERSION" "$PLIST_PATH"
+git -C "$REPO_ROOT" add "$PLIST_PATH"
+git -C "$REPO_ROOT" commit -m "chore: bump version to $SHORT_VERSION"
 
 # ── Tests ─────────────────────────────────────────────────────────────────────
 
@@ -160,7 +169,6 @@ else
     SIG_OUTPUT=$("$SIGN_UPDATE" "$DMG")
     ED_SIG=$(printf '%s' "$SIG_OUTPUT" | grep -o 'sparkle:edSignature="[^"]*"' | cut -d'"' -f2)
     DMG_LENGTH=$(stat -f%z "$DMG")
-    SHORT_VERSION="${VERSION#v}"
     DMG_FILENAME=$(basename "$DMG")
     DOWNLOAD_URL="https://github.com/thejefflarson/mosaic/releases/download/${VERSION}/${DMG_FILENAME}"
     PUB_DATE=$(date -u '+%a, %d %b %Y %H:%M:%S +0000')
