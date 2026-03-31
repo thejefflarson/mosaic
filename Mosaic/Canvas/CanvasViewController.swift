@@ -811,10 +811,11 @@ final class CanvasViewController: NSViewController {
     }
 
     @objc func fitAll() {
-        let windows = terminalController.windows
-        guard !windows.isEmpty else { return }
+        let frames = terminalController.windows.map(\.frame)
+            + annotationController.annotations.map(\.frame)
+        guard let first = frames.first else { return }
 
-        let union = windows.map(\.frame).reduce(windows[0].frame) { $0.union($1) }
+        let union = frames.dropFirst().reduce(first) { $0.union($1) }
         let padding: CGFloat = 80
         let paddedUnion = union.insetBy(dx: -padding, dy: -padding)
 

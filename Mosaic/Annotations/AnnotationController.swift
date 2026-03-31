@@ -106,27 +106,23 @@ final class AnnotationController {
 
     func add(_ av: AnnotationView) {
         wire(av)
-        undoManager?.beginUndoGrouping()
         undoManager?.setActionName("Add Annotation")
         undoManager?.registerUndo(withTarget: self) { @MainActor [weak av] ac in
             guard let av else { return }
             ac.remove(av)
         }
-        undoManager?.endUndoGrouping()
         annotations.append(av)
         canvasView?.addAnnotation(av)
         onChange?()
     }
 
     func remove(_ av: AnnotationView) {
-        undoManager?.beginUndoGrouping()
         undoManager?.setActionName("Delete Annotation")
         // Strong capture: av is removed from the view hierarchy below, so nothing else
         // retains it. The undo manager must hold it alive until the history is cleared.
         undoManager?.registerUndo(withTarget: self) { @MainActor ac in
             ac.add(av)
         }
-        undoManager?.endUndoGrouping()
         annotations.removeAll { $0 === av }
         canvasView?.removeAnnotation(av)
         onRemoved?(av)
@@ -135,13 +131,11 @@ final class AnnotationController {
 
     func move(_ av: AnnotationView, to newFrame: CGRect) {
         let oldFrame = av.frame
-        undoManager?.beginUndoGrouping()
-        undoManager?.setActionName("Move")
+        undoManager?.setActionName("Move Annotation")
         undoManager?.registerUndo(withTarget: self) { @MainActor [weak av] ac in
             guard let av else { return }
             ac.move(av, to: oldFrame)
         }
-        undoManager?.endUndoGrouping()
         av.frame = newFrame
         onChange?()
     }
@@ -227,7 +221,7 @@ final class AnnotationController {
         }
         av.onDragEnded = { [weak self, weak av] fromFrame, _ in
             guard let self, let av else { return }
-            undoManager?.setActionName("Move")
+            undoManager?.setActionName("Move Annotation")
             undoManager?.registerUndo(withTarget: self) { @MainActor [weak av] ac in
                 guard let av else { return }
                 ac.move(av, to: fromFrame)

@@ -32,12 +32,16 @@ open Mosaic.xcodeproj
 
 ```
 CanvasTerm/
-├── App/                    # Entry point, AppDelegate, menu bar
-├── Canvas/                 # CanvasView (pan/zoom), CanvasViewController, Viewport math
-├── Terminal/               # TerminalWindowView, TitleBarView, ResizeHandleView, TerminalManager
+├── App/                    # Entry point, AppDelegate, menu bar, ScriptingCommands
+├── Canvas/                 # CanvasView (pan/zoom), CanvasViewController, CanvasGeometry
+├── Terminal/               # TerminalController, TerminalWindowView, TitleBarView,
+│                           #   ResizeHandleView, TerminalManager, TerminalSettings
+├── Annotations/            # AnnotationController, AnnotationViews, CanvasTool,
+│                           #   ToolPaletteView
 ├── Minimap/                # MinimapView overlay
-├── Persistence/            # WorkspaceSnapshot (Codable), WorkspaceStore
-└── Utilities/              # CGRect extensions, keyboard shortcut helpers
+├── Theming/                # Theme, ThemeEditorViewController
+├── Persistence/            # WorkspaceSnapshot (Codable), WorkspaceStore, WorkspaceState
+└── Utilities/              # CGRect/CGPoint extensions, SnapEngine, CanvasCursorManager
 ```
 
 ## Key architecture decisions
@@ -55,6 +59,12 @@ CanvasTerm/
 **Drag in world space:** Screen-space delta from `mouseDragged` must be divided by `currentZoom` before applying to world-space frame origin. Forgetting this makes windows "run away" at non-100% zoom.
 
 **FlippedView:** `worldView` is a `FlippedView` (isFlipped = true) so Y increases downward, matching screen coordinate conventions for pan math.
+
+**Snap engine:** `SnapEngine.swift` is a pure function (`snapRect`) that tests all 9 edge combinations (minX, midX, maxX × minY, midY, maxY) against reference rects and returns the best snap plus world-space guide line positions. `CanvasViewController.snapPosition()` calls it, converting guide positions to screen space for `SnapGuideOverlay`. During group drag, the bounding box of all selected items is snapped (not the dragged item's frame alone), and the resulting correction delta is applied uniformly to all peers.
+
+**Controller pattern:** `TerminalController` and `AnnotationController` own their respective element sets and are created by `CanvasViewController`. Dependencies (snap, undo, theme) are injected as closures at init time so controllers never hold a back-reference to the VC. Mutations fire an `onChange` closure; the VC wires this to minimap refresh, selection ring update, and the 5-second save debounce.
+
+**Undo model:** Undo actions are registered directly on `NSUndoManager` (via the responder chain) without grouping — each mutation is a single undoable step. Group-drag peer undos are registered in the same `mouseUp` event as the dragged item, so NSUndoManager's event-based coalescing bundles them into one Cmd+Z action automatically.
 
 ## Dependency
 
@@ -75,10 +85,10 @@ xcodebuild test -scheme MosaicTests -destination 'platform=macOS' -IDEPackageSup
 ## Release
 
 ```bash
-./Scripts/release.sh v0.3.0
+./Scripts/release.sh v0.5.3
 ```
 
-Builds a signed + notarized DMG, pushes the git tag, and creates a GitHub release.
+The script bumps `CFBundleShortVersionString` in `Info.plist`, commits it, then builds a signed + notarized DMG, pushes the git tag, and creates a GitHub release. The working tree must be clean before running (the plist commit is made by the script itself).
 Apple Developer team ID `2PR729W8E3` is hardcoded as the default. Notarytool credentials
 must be stored in the login keychain under the profile name `MosaicNotarization`:
 
@@ -103,4 +113,4 @@ cleanup (`kittyArrowMonitor`).
 ## Planned features (not yet implemented)
 
 - Minimap click/drag accuracy improvements
-- Resize handle cursors (currently crosshair for corners)
+- Resize handle cursors (currently crosshair for all corner/edge handles)
