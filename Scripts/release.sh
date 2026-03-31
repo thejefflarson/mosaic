@@ -61,12 +61,16 @@ fi
 echo "releasing $APP_NAME $VERSION"
 SHORT_VERSION="${VERSION#v}"
 
-# ── Bump version in Info.plist ────────────────────────────────────────────────
+# ── Bump version in Info.plist and project.yml ───────────────────────────────
 
 PLIST_PATH="$REPO_ROOT/Mosaic/Resources/Info.plist"
+PROJECT_YML="$REPO_ROOT/project.yml"
 echo "→ bumping CFBundleShortVersionString to $SHORT_VERSION"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $SHORT_VERSION" "$PLIST_PATH"
-git -C "$REPO_ROOT" add "$PLIST_PATH"
+# project.yml is the xcodegen source; xcodegen merges its properties into Info.plist
+# during the archive step, so it must match or it will overwrite the plist bump.
+sed -i '' "s/CFBundleShortVersionString: \".*\"/CFBundleShortVersionString: \"$SHORT_VERSION\"/" "$PROJECT_YML"
+git -C "$REPO_ROOT" add "$PLIST_PATH" "$PROJECT_YML"
 git -C "$REPO_ROOT" commit -m "chore: bump version to $SHORT_VERSION"
 
 # ── Tests ─────────────────────────────────────────────────────────────────────

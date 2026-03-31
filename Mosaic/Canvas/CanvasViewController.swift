@@ -282,11 +282,15 @@ final class CanvasViewController: NSViewController {
     private func setupMinimap() {
         minimapView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(minimapView)
+
+        let wc = minimapView.widthAnchor.constraint(equalToConstant: 192)
+        let hc = minimapView.heightAnchor.constraint(equalToConstant: 120)
+        minimapView.widthConstraint  = wc
+        minimapView.heightConstraint = hc
         NSLayoutConstraint.activate([
             minimapView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16),
             minimapView.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -16),
-            minimapView.widthAnchor.constraint(equalToConstant: 180),
-            minimapView.heightAnchor.constraint(equalToConstant: 120),
+            wc, hc,
         ])
 
         minimapView.canvasView = canvasView
@@ -297,6 +301,10 @@ final class CanvasViewController: NSViewController {
             vp.panX = -worldPt.x * vp.zoom + canvasView.bounds.width / 2
             vp.panY = -worldPt.y * vp.zoom + canvasView.bounds.height / 2
             canvasView.setViewport(vp)
+        }
+
+        minimapView.onResized = { [weak self] in
+            self?.scheduleSave()
         }
     }
 
@@ -737,6 +745,10 @@ final class CanvasViewController: NSViewController {
             restoreAnnotation(s)
         }
 
+        if let w = snapshot.minimapWidth, let h = snapshot.minimapHeight {
+            minimapView.setMinimapSize(CGSize(width: w, height: h))
+        }
+
         zoomToFitAllElements()
         updateFocusFollowsCenter()
     }
@@ -786,7 +798,9 @@ final class CanvasViewController: NSViewController {
         let snapshot = WorkspaceSnapshot(
             viewport: WorkspaceSnapshot.ViewportState(panX: vp.panX, panY: vp.panY, zoom: vp.zoom),
             windows: terminalController.makeSnapshots(),
-            annotations: annotationController.annotations.compactMap { $0.toSnapshot() }
+            annotations: annotationController.annotations.compactMap { $0.toSnapshot() },
+            minimapWidth: minimapView.widthConstraint?.constant,
+            minimapHeight: minimapView.heightConstraint?.constant
         )
         WorkspaceStore.shared.save(snapshot)
     }

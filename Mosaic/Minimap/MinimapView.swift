@@ -2,11 +2,18 @@ import AppKit
 
 /// A fixed overlay that renders a bird's-eye view of the entire canvas,
 /// updated synchronously whenever the canvas state changes.
+/// The top-left corner is a drag handle for resizing.
 final class MinimapView: NSView {
     override var isFlipped: Bool { true }
 
     var onPanToWorld: ((CGPoint) -> Void)?
+    var onResized: (() -> Void)?
     weak var canvasView: CanvasView?
+
+    // Resize handle in the top-left corner
+    private static let handleSize: CGFloat = 12
+    private var resizeDragStart: NSPoint?
+    private var sizeAtDragStart: CGSize?
 
     private var snapshot: NSImage?
     private var renderPending = false
@@ -189,15 +196,72 @@ final class MinimapView: NSView {
         }
     }
 
-    // MARK: - Click/drag to pan
+    // MARK: - Cursor
 
-    override func mouseDown(with event: NSEvent) { panToEvent(event) }
-    override func mouseDragged(with event: NSEvent) { panToEvent(event) }
+    override func resetCursorRects() {
+        let handle = NSRect(x: 0, y: 0, width: Self.handleSize, height: Self.handleSize)
+        let corner: NSCursor
+        if #available(macOS 15, *) {
+            corner = NSCursor.frameResize(position: .topLeft, directions: .all)
+        } else {
+            corner = .crosshair
+        }
+        addCursorRect(handle, cursor: corner)
+        let rest = NSRect(x: Self.handleSize, y: 0,
+                          width: bounds.width - Self.handleSize, height: bounds.height)
+        addCursorRect(rest, cursor: .pointingHand)
+    }
 
-    private func panToEvent(_ event: NSEvent) {
+    // MARK: - Mouse: resize (top-left handle) or pan (everywhere else)
+
+    override func mouseDown(with event: NSEvent) {
         let loc = convert(event.locationInWindow, from: nil)
+        if loc.x < Self.handleSize && loc.y < Self.handleSize {
+            resizeDragStart = NSEvent.mouseLocation
+            sizeAtDragStart = bounds.size
+        } else {
+            resizeDragStart = nil
+            panToLocation(loc)
+        }
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        let loc = convert(event.locationInWindow, from: nil)
+        if let start = resizeDragStart, let startSize = sizeAtDragStart {
+            let current = NSEvent.mouseLocation
+            // Drive width from the diagonal drag delta; derive height at exactly 16:9.
+            let dx = -(current.x - start.x)
+            let dy =  (current.y - start.y)
+            let newW = (startSize.width + (dx + dy) / 2).clamped(to: 120...600)
+            setMinimapSize(CGSize(width: newW, height: (newW * 10 / 16).rounded()))
+            onResized?()
+        } else {
+            panToLocation(loc)
+        }
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        if resizeDragStart != nil {
+            resizeDragStart = nil
+            sizeAtDragStart = nil
+            onResized?()
+        }
+    }
+
+    private func panToLocation(_ loc: CGPoint) {
         let worldX = (loc.x - renderOffset.x) / renderScale + worldExtent.minX
         let worldY = (loc.y - renderOffset.y) / renderScale + worldExtent.minY
         onPanToWorld?(CGPoint(x: worldX, y: worldY))
     }
+
+    /// Called by the parent to apply a persisted or programmatic size.
+    /// Height is always derived from width at 16:9, ignoring any stored height.
+    func setMinimapSize(_ size: CGSize) {
+        let w = size.width.clamped(to: 120...600)
+        widthConstraint?.constant  = w
+        heightConstraint?.constant = (w * 10 / 16).rounded()
+    }
+
+    var widthConstraint:  NSLayoutConstraint?
+    var heightConstraint: NSLayoutConstraint?
 }

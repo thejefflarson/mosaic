@@ -52,18 +52,25 @@ struct WorkspaceSnapshot: Codable, Sendable {
     var viewport: ViewportState
     var windows: [WindowSnapshot]
     var annotations: [AnnotationSnapshot]
+    var minimapWidth: CGFloat?
+    var minimapHeight: CGFloat?
 
-    init(viewport: ViewportState, windows: [WindowSnapshot], annotations: [AnnotationSnapshot] = []) {
+    init(viewport: ViewportState, windows: [WindowSnapshot], annotations: [AnnotationSnapshot] = [],
+         minimapWidth: CGFloat? = nil, minimapHeight: CGFloat? = nil) {
         self.viewport = viewport
         self.windows = windows
         self.annotations = annotations
+        self.minimapWidth = minimapWidth
+        self.minimapHeight = minimapHeight
     }
 
-    // Custom decoder so that snapshots saved before annotations were added still load correctly.
+    // Custom decoder so that snapshots saved before annotations or minimap size were added still load correctly.
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        viewport    = try c.decode(ViewportState.self,        forKey: .viewport)
-        windows     = try c.decode([WindowSnapshot].self,     forKey: .windows)
-        annotations = try c.decodeIfPresent([AnnotationSnapshot].self, forKey: .annotations) ?? []
+        viewport      = try c.decode(ViewportState.self,        forKey: .viewport)
+        windows       = try c.decode([WindowSnapshot].self,     forKey: .windows)
+        annotations   = try c.decodeIfPresent([AnnotationSnapshot].self, forKey: .annotations) ?? []
+        minimapWidth  = try c.decodeIfPresent(CGFloat.self, forKey: .minimapWidth)
+        minimapHeight = try c.decodeIfPresent(CGFloat.self, forKey: .minimapHeight)
     }
 }
