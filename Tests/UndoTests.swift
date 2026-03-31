@@ -19,6 +19,8 @@ struct UndoTests {
         window.contentViewController = vc
         vc.loadViewIfNeeded()
         vc.undoManager?.removeAllActions()
+        // groupsByEvent=false: tests have no run loop, so groups must be explicit.
+        vc.undoManager?.groupsByEvent = false
         self.vc = vc
         self.window = window
     }
@@ -28,9 +30,10 @@ struct UndoTests {
     private func makeText(at origin: CGPoint = .zero)   -> TextAnnotationView  { TextAnnotationView(at: origin) }
     private func makeSticky(at origin: CGPoint = .zero) -> StickyNoteView      { StickyNoteView(at: origin) }
 
-    /// Performs an undoable operation and closes the auto-opened undo group.
-    /// Required because tests have no run loop to drain the group automatically.
+    /// Wraps an undoable operation in an explicit undo group.
+    /// Required because groupsByEvent=false means groups are never auto-opened.
     private func undoably(_ action: () -> Void) {
+        vc.undoManager?.beginUndoGrouping()
         action()
         vc.undoManager?.endUndoGrouping()
     }
