@@ -71,7 +71,7 @@ echo "→ bumping CFBundleShortVersionString to $SHORT_VERSION"
 # during the archive step, so it must match or it will overwrite the plist bump.
 sed -i '' "s/CFBundleShortVersionString: \".*\"/CFBundleShortVersionString: \"$SHORT_VERSION\"/" "$PROJECT_YML"
 git -C "$REPO_ROOT" add "$PLIST_PATH" "$PROJECT_YML"
-git -C "$REPO_ROOT" commit -m "chore: bump version to $SHORT_VERSION"
+git -C "$REPO_ROOT" diff --cached --quiet || git -C "$REPO_ROOT" commit -m "chore: bump version to $SHORT_VERSION"
 
 # ── Tests ─────────────────────────────────────────────────────────────────────
 
