@@ -3,8 +3,7 @@ import AppKit
 /// A fixed overlay that renders a bird's-eye view of the entire canvas,
 /// updated synchronously whenever the canvas state changes.
 /// The top-left corner is a drag handle for resizing.
-final class MinimapView: NSView {
-    override var isFlipped: Bool { true }
+final class MinimapView: FlippedView {
 
     var onPanToWorld: ((CGPoint) -> Void)?
     var onResized: (() -> Void)?

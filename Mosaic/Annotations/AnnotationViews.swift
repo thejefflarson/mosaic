@@ -4,7 +4,7 @@ import AppKit
 
 /// Abstract base for all annotation views positioned in world space.
 /// Handles drag-to-move when the pointer tool is active.
-class AnnotationView: NSView {
+class AnnotationView: FlippedView {
     let annotationID = UUID()
     weak var canvasView: CanvasView?
     var onChanged: (() -> Void)?
@@ -32,7 +32,6 @@ class AnnotationView: NSView {
     required init?(coder: NSCoder) { fatalError() }
 
     override var isOpaque: Bool { false }
-    override var isFlipped: Bool { true }   // match world-space y-down
 
     // MARK: - Delete (right-click)
 

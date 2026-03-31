@@ -19,9 +19,6 @@ struct UndoTests {
         window.contentViewController = vc
         vc.loadViewIfNeeded()
         vc.undoManager?.removeAllActions()
-        // Tests have no run loop, so disable groupsByEvent — production code
-        // uses explicit begin/end grouping instead.
-        vc.undoManager?.groupsByEvent = false
         self.vc = vc
         self.window = window
     }
@@ -31,22 +28,29 @@ struct UndoTests {
     private func makeText(at origin: CGPoint = .zero)   -> TextAnnotationView  { TextAnnotationView(at: origin) }
     private func makeSticky(at origin: CGPoint = .zero) -> StickyNoteView      { StickyNoteView(at: origin) }
 
+    /// Performs an undoable operation and closes the auto-opened undo group.
+    /// Required because tests have no run loop to drain the group automatically.
+    private func undoably(_ action: () -> Void) {
+        action()
+        vc.undoManager?.endUndoGrouping()
+    }
+
     // MARK: - Add annotation
 
     @Test func addAnnotationRegistersUndo() {
-        vc.addAnnotation(makeText())
+        undoably { vc.addAnnotation(makeText()) }
         #expect(vc.undoManager?.canUndo == true)
     }
 
     @Test func addAnnotationUndoRemovesIt() {
-        vc.addAnnotation(makeText())
+        undoably { vc.addAnnotation(makeText()) }
         #expect(vc.annotationCount == 1)
         vc.undoManager?.undo()
         #expect(vc.annotationCount == 0)
     }
 
     @Test func addAnnotationUndoThenRedoRestoresIt() {
-        vc.addAnnotation(makeText())
+        undoably { vc.addAnnotation(makeText()) }
         vc.undoManager?.undo()
         #expect(vc.annotationCount == 0)
         #expect(vc.undoManager?.canRedo == true)
@@ -57,25 +61,25 @@ struct UndoTests {
     // MARK: - Remove annotation
 
     @Test func removeAnnotationRegistersUndo() {
-        let av = makeText(); vc.addAnnotation(av)
+        let av = makeText(); undoably { vc.addAnnotation(av) }
         vc.undoManager?.removeAllActions()
-        vc.removeAnnotation(av)
+        undoably { vc.removeAnnotation(av) }
         #expect(vc.undoManager?.canUndo == true)
     }
 
     @Test func removeAnnotationUndoRestoresIt() {
-        let av = makeText(); vc.addAnnotation(av)
+        let av = makeText(); undoably { vc.addAnnotation(av) }
         vc.undoManager?.removeAllActions()
-        vc.removeAnnotation(av)
+        undoably { vc.removeAnnotation(av) }
         #expect(vc.annotationCount == 0)
         vc.undoManager?.undo()
         #expect(vc.annotationCount == 1)
     }
 
     @Test func removeAnnotationRedoRemovesItAgain() {
-        let av = makeText(); vc.addAnnotation(av)
+        let av = makeText(); undoably { vc.addAnnotation(av) }
         vc.undoManager?.removeAllActions()
-        vc.removeAnnotation(av)
+        undoably { vc.removeAnnotation(av) }
         vc.undoManager?.undo()
         #expect(vc.annotationCount == 1)
         vc.undoManager?.redo()
@@ -87,18 +91,18 @@ struct UndoTests {
     @Test func moveAnnotationRegistersUndo() {
         let av = makeText(at: CGPoint(x: 100, y: 100))
         av.frame = CGRect(x: 100, y: 100, width: 200, height: 80)
-        vc.addAnnotation(av)
+        undoably { vc.addAnnotation(av) }
         vc.undoManager?.removeAllActions()
-        vc.moveAnnotation(av, to: CGRect(x: 300, y: 300, width: 200, height: 80))
+        undoably { vc.moveAnnotation(av, to: CGRect(x: 300, y: 300, width: 200, height: 80)) }
         #expect(vc.undoManager?.canUndo == true)
     }
 
     @Test func moveAnnotationUndoRestoresOriginalFrame() {
         let original = CGRect(x: 100, y: 100, width: 200, height: 80)
-        let av = makeText(); av.frame = original; vc.addAnnotation(av)
+        let av = makeText(); av.frame = original; undoably { vc.addAnnotation(av) }
         vc.undoManager?.removeAllActions()
         let moved = CGRect(x: 300, y: 300, width: 200, height: 80)
-        vc.moveAnnotation(av, to: moved)
+        undoably { vc.moveAnnotation(av, to: moved) }
         #expect(av.frame == moved)
         vc.undoManager?.undo()
         #expect(av.frame == original)
@@ -106,10 +110,10 @@ struct UndoTests {
 
     @Test func moveAnnotationRedoReappliesMove() {
         let original = CGRect(x: 50, y: 50, width: 100, height: 60)
-        let av = makeText(); av.frame = original; vc.addAnnotation(av)
+        let av = makeText(); av.frame = original; undoably { vc.addAnnotation(av) }
         vc.undoManager?.removeAllActions()
         let moved = CGRect(x: 400, y: 400, width: 100, height: 60)
-        vc.moveAnnotation(av, to: moved)
+        undoably { vc.moveAnnotation(av, to: moved) }
         vc.undoManager?.undo()
         #expect(av.frame == original)
         vc.undoManager?.redo()
@@ -122,10 +126,10 @@ struct UndoTests {
         let frameA = CGRect(x: 0,   y: 0,   width: 100, height: 60)
         let frameB = CGRect(x: 100, y: 100, width: 100, height: 60)
         let frameC = CGRect(x: 200, y: 200, width: 100, height: 60)
-        let av = makeText(); av.frame = frameA; vc.addAnnotation(av)
+        let av = makeText(); av.frame = frameA; undoably { vc.addAnnotation(av) }
         vc.undoManager?.removeAllActions()
-        vc.moveAnnotation(av, to: frameB)
-        vc.moveAnnotation(av, to: frameC)
+        undoably { vc.moveAnnotation(av, to: frameB) }
+        undoably { vc.moveAnnotation(av, to: frameC) }
         vc.undoManager?.undo(); #expect(av.frame == frameB)
         vc.undoManager?.undo(); #expect(av.frame == frameA)
     }
@@ -134,10 +138,10 @@ struct UndoTests {
         let frameA = CGRect(x: 0,   y: 0,   width: 100, height: 60)
         let frameB = CGRect(x: 100, y: 100, width: 100, height: 60)
         let frameC = CGRect(x: 200, y: 200, width: 100, height: 60)
-        let av = makeText(); av.frame = frameA; vc.addAnnotation(av)
+        let av = makeText(); av.frame = frameA; undoably { vc.addAnnotation(av) }
         vc.undoManager?.removeAllActions()
-        vc.moveAnnotation(av, to: frameB)
-        vc.moveAnnotation(av, to: frameC)
+        undoably { vc.moveAnnotation(av, to: frameB) }
+        undoably { vc.moveAnnotation(av, to: frameC) }
         vc.undoManager?.undo(); vc.undoManager?.undo()
         vc.undoManager?.redo(); #expect(av.frame == frameB)
         vc.undoManager?.redo(); #expect(av.frame == frameC)
@@ -146,15 +150,15 @@ struct UndoTests {
     // MARK: - Multiple annotation types
 
     @Test func stickyNoteAddUndoRemovesIt() {
-        vc.addAnnotation(makeSticky())
+        undoably { vc.addAnnotation(makeSticky()) }
         #expect(vc.annotationCount == 1)
         vc.undoManager?.undo()
         #expect(vc.annotationCount == 0)
     }
 
     @Test func mixedAnnotationUndoIsOrdered() {
-        vc.addAnnotation(makeText())
-        vc.addAnnotation(makeSticky())
+        undoably { vc.addAnnotation(makeText()) }
+        undoably { vc.addAnnotation(makeSticky()) }
         #expect(vc.annotationCount == 2)
         vc.undoManager?.undo()
         #expect(vc.annotationCount == 1)
@@ -169,15 +173,15 @@ struct UndoTests {
     }
 
     @Test func canRedoIsFalseBeforeAnyUndo() {
-        vc.addAnnotation(makeText())
+        undoably { vc.addAnnotation(makeText()) }
         #expect(vc.undoManager?.canRedo != true)
     }
 
     @Test func canRedoIsFalseAfterNewAction() {
-        vc.addAnnotation(makeText())
+        undoably { vc.addAnnotation(makeText()) }
         vc.undoManager?.undo()
         #expect(vc.undoManager?.canRedo == true)
-        vc.addAnnotation(makeText())
+        undoably { vc.addAnnotation(makeText()) }
         #expect(vc.undoManager?.canRedo != true)
     }
 }

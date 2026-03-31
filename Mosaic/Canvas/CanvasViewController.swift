@@ -5,10 +5,9 @@ import os
 // MARK: - Snap guide overlay
 
 /// Transparent view that draws alignment guide lines during drag operations.
-private final class SnapGuideOverlay: NSView {
+private final class SnapGuideOverlay: FlippedView {
     var guides: [(isVertical: Bool, pos: CGFloat)] = [] { didSet { needsDisplay = true } }
 
-    override var isFlipped: Bool { true }
     override var isOpaque: Bool { false }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 

@@ -74,6 +74,8 @@ SwiftTerm via SPM: `https://github.com/migueldeicaza/SwiftTerm.git` (branch: mai
 
 Saves to `~/Library/Application Support/Mosaic/workspace.json` on a 5-second debounce after any change. Restores layout and working directories on launch. Terminal session content is not persisted (PTYs are always fresh).
 
+**Shell intentionally not persisted:** on restore, Mosaic always reads `$SHELL` from the environment rather than replaying the shell recorded in the snapshot. This respects the user — if they ran `chsh` during a session, the next launch should honour that choice, not silently revert to the old shell. Do not "fix" this by persisting the shell path.
+
 ## Before pushing
 
 Always run tests before pushing to avoid breaking CI:
@@ -100,6 +102,8 @@ xcrun notarytool store-credentials "MosaicNotarization" \
 ```
 
 ## Known workarounds to revisit
+
+**Xcode 26.4 test runner hang (added 2026-03-31):** `xcodebuild test` hangs for ~340 seconds with "The test runner hung before establishing connection" on Xcode 26.4 / macOS 26.4 regardless of test code. This is an Xcode 26.4 regression — CI uses Xcode 26.2 where tests run fine. Do not spend time debugging this locally; just push and let CI validate.
 
 **Kitty keyboard arrow key fix (added 2026-03-25, revisit ~2026-04-08):** Claude Code v2.1.83
 introduced a regression ("Fixed mouse tracking escape sequences leaking to shell prompt after exit")

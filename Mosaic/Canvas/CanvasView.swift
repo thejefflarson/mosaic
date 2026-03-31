@@ -3,8 +3,7 @@ import AppKit
 /// The infinite canvas view. `worldView` fills the canvas frame; pan/zoom is
 /// applied via `setBoundsOrigin` / `setBoundsSize` so AppKit's coordinate system
 /// stays correct — no CALayer transform trickery needed.
-final class CanvasView: NSView {
-    override var isFlipped: Bool { true }
+final class CanvasView: FlippedView {
 
     // MARK: - Public state
 
