@@ -11,7 +11,7 @@
     <item>
       <title>Mosaic 0.5.0</title>
       <pubDate>Wed, 25 Mar 2026 08:46:32 +0000</pubDate>
-      <sparkle:version>0.5.0</sparkle:version>
+      <sparkle:version>1</sparkle:version>
       <sparkle:shortVersionString>0.5.0</sparkle:shortVersionString>
       <enclosure url="https://github.com/thejefflarson/mosaic/releases/download/v0.5.0/Mosaic-v0.5.0.dmg"
                  sparkle:edSignature="Kf75AAvMP6M2mkBCGZt+7ULyCe36KSfLQGq2tSFI2rxBdyNmXh2o6WxyvNAxkzgSw3Ftx4m7eJ2/CCQwbjvuDg=="
@@ -22,7 +22,7 @@
     <item>
       <title>Mosaic 0.5.1</title>
       <pubDate>Mon, 30 Mar 2026 03:24:36 +0000</pubDate>
-      <sparkle:version>0.5.1</sparkle:version>
+      <sparkle:version>1</sparkle:version>
       <sparkle:shortVersionString>0.5.1</sparkle:shortVersionString>
       <enclosure url="https://github.com/thejefflarson/mosaic/releases/download/v0.5.1/Mosaic-v0.5.1.dmg"
                  sparkle:edSignature="dDjKkiZWFP3D3Bu4B4iROfEpPSYUWvBhtYZlX3a5hx6XH9/1m1c042r1eEZUvBcpjf2e0e8fVL7lr9IDeO2qBg=="
@@ -33,7 +33,7 @@
     <item>
       <title>Mosaic 0.5.2</title>
       <pubDate>Mon, 30 Mar 2026 05:40:20 +0000</pubDate>
-      <sparkle:version>0.5.2</sparkle:version>
+      <sparkle:version>1</sparkle:version>
       <sparkle:shortVersionString>0.5.2</sparkle:shortVersionString>
       <enclosure url="https://github.com/thejefflarson/mosaic/releases/download/v0.5.2/Mosaic-v0.5.2.dmg"
                  sparkle:edSignature="x4M/bh/4Q2TjLvEq028+ARFFC4sDLGl3UJHOA+BG/dC9JYoS0TBmvGkVruDIo77/JDfk1i9HdWCn/fjg6eH+Cw=="
@@ -44,7 +44,7 @@
     <item>
       <title>Mosaic 0.5.3</title>
       <pubDate>Mon, 30 Mar 2026 05:47:12 +0000</pubDate>
-      <sparkle:version>0.5.3</sparkle:version>
+      <sparkle:version>1</sparkle:version>
       <sparkle:shortVersionString>0.5.3</sparkle:shortVersionString>
       <enclosure url="https://github.com/thejefflarson/mosaic/releases/download/v0.5.3/Mosaic-v0.5.3.dmg"
                  sparkle:edSignature="o2+oThKF909Z9d+dYZXb6tag6fskUYjAr3Zq7SQOFlZ9FsI+tXm3SQdDiEb1UHsDi8Cc6txye43U8WceB/ZWAw=="
@@ -55,7 +55,7 @@
     <item>
       <title>Mosaic 0.6.0</title>
       <pubDate>Wed, 01 Apr 2026 00:24:11 +0000</pubDate>
-      <sparkle:version>0.6.0</sparkle:version>
+      <sparkle:version>1</sparkle:version>
       <sparkle:shortVersionString>0.6.0</sparkle:shortVersionString>
       <enclosure url="https://github.com/thejefflarson/mosaic/releases/download/v0.6.0/Mosaic-v0.6.0.dmg"
                  sparkle:edSignature="DW/ScrnLlSRcW7R1euYVEUH9fxFvbamEukvOB083GQlsQV7j8VUT2joi13xef/e40xUCjTpl5pJNG0c61yKEBA=="

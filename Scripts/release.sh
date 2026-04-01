@@ -70,6 +70,13 @@ echo "→ bumping CFBundleShortVersionString to $SHORT_VERSION"
 # project.yml is the xcodegen source; xcodegen merges its properties into Info.plist
 # during the archive step, so it must match or it will overwrite the plist bump.
 sed -i '' "s/CFBundleShortVersionString: \".*\"/CFBundleShortVersionString: \"$SHORT_VERSION\"/" "$PROJECT_YML"
+
+# Increment CFBundleVersion (build number) so Sparkle can compare builds correctly.
+CURRENT_BUILD=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$PLIST_PATH")
+BUILD_NUMBER=$(( CURRENT_BUILD + 1 ))
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUMBER" "$PLIST_PATH"
+sed -i '' "s/CFBundleVersion: \".*\"/CFBundleVersion: \"$BUILD_NUMBER\"/" "$PROJECT_YML"
+
 git -C "$REPO_ROOT" add "$PLIST_PATH" "$PROJECT_YML"
 git -C "$REPO_ROOT" diff --cached --quiet || git -C "$REPO_ROOT" commit -m "chore: bump version to $SHORT_VERSION"
 
@@ -178,17 +185,17 @@ else
     PUB_DATE=$(date -u '+%a, %d %b %Y %H:%M:%S +0000')
 
     python3 - "$REPO_ROOT/appcast.xml" \
-              "$SHORT_VERSION" "$DOWNLOAD_URL" \
+              "$SHORT_VERSION" "$BUILD_NUMBER" "$DOWNLOAD_URL" \
               "$ED_SIG" "$DMG_LENGTH" "$PUB_DATE" <<'PYEOF'
 import sys
 from pathlib import Path
 
-appcast, version, url, sig, length, pub_date = sys.argv[1:]
+appcast, version, build, url, sig, length, pub_date = sys.argv[1:]
 item = f"""
     <item>
       <title>Mosaic {version}</title>
       <pubDate>{pub_date}</pubDate>
-      <sparkle:version>{version}</sparkle:version>
+      <sparkle:version>{build}</sparkle:version>
       <sparkle:shortVersionString>{version}</sparkle:shortVersionString>
       <enclosure url="{url}"
                  sparkle:edSignature="{sig}"

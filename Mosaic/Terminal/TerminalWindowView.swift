@@ -277,14 +277,14 @@ final class TerminalWindowView: NSView {
         var row = -1
         while lines.count < maxLines {
             guard let line = t.getScrollInvariantLine(row: row) else { break }
-            lines.insert(line.translateToString(trimRight: false, characterProvider: { let c = $0.getCharacter(); return c == "\0" ? " " : c }), at: 0)
+            lines.insert(line.translateToString(trimRight: true, characterProvider: { let c = $0.getCharacter(); return c == "\0" ? " " : c }), at: 0)
             row -= 1
         }
 
         // Visible screen lines
         for r in 0..<t.rows {
             if let line = t.getScrollInvariantLine(row: r) {
-                lines.append(line.translateToString(trimRight: false, characterProvider: { let c = $0.getCharacter(); return c == "\0" ? " " : c }))
+                lines.append(line.translateToString(trimRight: true, characterProvider: { let c = $0.getCharacter(); return c == "\0" ? " " : c }))
             }
         }
 
