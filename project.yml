@@ -55,7 +55,7 @@ targets:
         OSAScriptingDefinition: Mosaic.sdef
         CFBundleDisplayName: Mosaic
         CFBundleIdentifier: com.jeff.Mosaic
-        CFBundleVersion: "3"
+        CFBundleVersion: "4"
         CFBundleShortVersionString: "0.6.1"
         NSPrincipalClass: NSApplication
         NSMainNibFile: ""
