@@ -62,5 +62,16 @@
                  length="3588636"
                  type="application/octet-stream" />
     </item>
+
+    <item>
+      <title>Mosaic 0.6.1</title>
+      <pubDate>Wed, 01 Apr 2026 15:59:16 +0000</pubDate>
+      <sparkle:version>4</sparkle:version>
+      <sparkle:shortVersionString>0.6.1</sparkle:shortVersionString>
+      <enclosure url="https://github.com/thejefflarson/mosaic/releases/download/v0.6.1/Mosaic-v0.6.1.dmg"
+                 sparkle:edSignature="5You/4ePV2Hjr0z8WJi+JRo2Z7B28h2K0M3THV+JOh3XvV77gm0HacBtHnyp9ZIouTsaddhEv1IQdGuip54dDg=="
+                 length="3588730"
+                 type="application/octet-stream" />
+    </item>
   </channel>
 </rss>
