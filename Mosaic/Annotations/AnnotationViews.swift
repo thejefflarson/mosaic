@@ -137,15 +137,22 @@ class AnnotationView: FlippedView {
     // MARK: - Snapshot support
 
     func toSnapshot() -> AnnotationSnapshot? { nil }
+
+    // MARK: - Minimap capture
+
+    /// Called before the minimap captures this view via `cacheDisplay`.
+    /// NSTextView-based subclasses override to force text layout so the capture
+    /// isn't blank when the view is offscreen.
+    func prepareForMinimapCapture() {}
 }
 
 // MARK: - Text label
 
-final class TextAnnotationView: AnnotationView, NSTextFieldDelegate {
-    let textField = NSTextField()
-    var textColor: NSColor = .white { didSet { textField.textColor = textColor } }
+final class TextAnnotationView: AnnotationView, NSTextViewDelegate {
+    let textView = NSTextView()
+    var textColor: NSColor = .white { didSet { textView.textColor = textColor } }
     var annotationFont: NSFont = NSFont.systemFont(ofSize: 148, weight: .regular) {
-        didSet { textField.font = annotationFont; sizeToFitText() }
+        didSet { textView.font = annotationFont; sizeToFitText() }
     }
 
     init(at worldPt: CGPoint, text: String = "") {
@@ -161,51 +168,60 @@ final class TextAnnotationView: AnnotationView, NSTextFieldDelegate {
     required init?(coder: NSCoder) { fatalError() }
 
     private func setup(text: String) {
-        textField.stringValue = text
-        textField.isEditable = true
-        textField.isBordered = false
-        textField.drawsBackground = false
-        textField.textColor = NSColor.white
-        textField.font = annotationFont
-        textField.placeholderString = "Text"
-        textField.delegate = self
-        addSubview(textField)
+        textView.string = text
+        textView.isEditable = true
+        textView.isRichText = false
+        textView.drawsBackground = false
+        textView.backgroundColor = .clear
+        textView.textColor = NSColor.white
+        textView.font = annotationFont
+        textView.delegate = self
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = false
+        textView.textContainer?.widthTracksTextView = false
+        textView.textContainer?.containerSize = CGSize(width: CGFloat.greatestFiniteMagnitude,
+                                                       height: CGFloat.greatestFiniteMagnitude)
+        addSubview(textView)
         let shadow = NSShadow()
         shadow.shadowColor = NSColor.black.withAlphaComponent(0.8)
         shadow.shadowBlurRadius = 3
         shadow.shadowOffset = NSSize(width: 0, height: -1)
-        textField.shadow = shadow
+        textView.shadow = shadow
         sizeToFitText()
     }
 
     private func sizeToFitText() {
-        let font = textField.font ?? annotationFont
-        let str = textField.stringValue.isEmpty ? (textField.placeholderString ?? "Text") : textField.stringValue
-        let measured = (str as NSString).size(withAttributes: [.font: font])
-        frame.size = CGSize(width: max(measured.width + 24, 160),
-                            height: max(measured.height + 16, font.pointSize + 10))
-        textField.frame = bounds
+        let font = textView.font ?? annotationFont
+        let str = textView.string.isEmpty ? "Text" : textView.string
+        let maxWidth: CGFloat = 2000
+        let measured = (str as NSString).boundingRect(
+            with: CGSize(width: maxWidth, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: [.font: font])
+        frame.size = CGSize(width: max(ceil(measured.width) + 24, 160),
+                            height: max(ceil(measured.height) + 16, font.pointSize + 10))
+        textView.frame = bounds
     }
 
     func beginEditing() {
-        window?.makeFirstResponder(textField)
+        window?.makeFirstResponder(textView)
     }
 
-    func controlTextDidChange(_ obj: Notification) {
+    func textDidChange(_ notification: Notification) {
         sizeToFitText()
         onChanged?()
     }
 
     // Escape dismisses editing and returns focus to the canvas.
-    func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
-        if selector == #selector(cancelOperation(_:)) {
+    func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+        if commandSelector == #selector(cancelOperation(_:)) {
             window?.makeFirstResponder(superview)
             return true
         }
         return false
     }
 
-    // In pointer mode, route all hits to self so the text field doesn't steal
+    // In pointer mode, route all hits to self so the text view doesn't steal
     // the drag. On a double-click (no drag), we start editing in mouseUp.
     override func hitTest(_ point: NSPoint) -> NSView? {
         guard canvasView?.activeTool == .pointer else { return super.hitTest(point) }
@@ -232,13 +248,18 @@ final class TextAnnotationView: AnnotationView, NSTextFieldDelegate {
         annotationFont = theme.annotationFont
     }
 
+    override func prepareForMinimapCapture() {
+        guard let lm = textView.layoutManager, let tc = textView.textContainer else { return }
+        lm.ensureLayout(for: tc)
+    }
+
     override func toSnapshot() -> AnnotationSnapshot? {
         AnnotationSnapshot(
             id: annotationID,
             kind: .text,
             x: frame.origin.x, y: frame.origin.y,
             width: frame.width, height: frame.height,
-            content: textField.stringValue
+            content: textView.string
         )
     }
 }
@@ -389,6 +410,11 @@ final class StickyNoteView: AnnotationView {
     override func applyTheme(_ theme: Theme) {
         themeForeground = theme.stickyForeground
         themeBackground = theme.stickyBackground
+    }
+
+    override func prepareForMinimapCapture() {
+        guard let lm = textView.layoutManager, let tc = textView.textContainer else { return }
+        lm.ensureLayout(for: tc)
     }
 
     override func toSnapshot() -> AnnotationSnapshot? {

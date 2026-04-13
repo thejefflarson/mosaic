@@ -16,6 +16,8 @@ final class MinimapView: FlippedView {
 
     private var snapshot: NSImage?
     private var renderPending = false
+    private var lastRenderTime: CFTimeInterval = 0
+    private static let renderInterval: CFTimeInterval = 1.0 / 30.0
 
     // Updated by update(), consumed by renderSnapshot()
     private var terminalWindows: [TerminalWindowView] = []
@@ -55,6 +57,21 @@ final class MinimapView: FlippedView {
         annotationViews = annotations
         focusedWindowID = focusedWindow?.id
         guard !renderPending else { return }
+        let now = CACurrentMediaTime()
+        let elapsed = now - lastRenderTime
+        if elapsed < Self.renderInterval {
+            // Schedule a trailing render so the final state is always drawn.
+            renderPending = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + (Self.renderInterval - elapsed)) { [weak self] in
+                guard let self else { return }
+                self.lastRenderTime = CACurrentMediaTime()
+                self.renderSnapshot()
+                self.needsDisplay = true
+                self.renderPending = false
+            }
+            return
+        }
+        lastRenderTime = now
         renderPending = true
         DispatchQueue.main.async { [weak self] in
             self?.renderSnapshot()
@@ -93,6 +110,9 @@ final class MinimapView: FlippedView {
             guard !av.frame.isEmpty else { continue }
             let sz = av.bounds.size
             guard sz.width > 0, sz.height > 0 else { continue }
+            // NSTextView-based annotations do lazy layout; force it before capture
+            // so offscreen text views aren't rendered blank.
+            av.prepareForMinimapCapture()
             // cacheDisplay captures screen-space pixels (Y-down) correctly,
             // unlike layer.render(in:) which renders in Y-up CA coordinates
             // and produces a flipped/squished result in our flipped drawing context.

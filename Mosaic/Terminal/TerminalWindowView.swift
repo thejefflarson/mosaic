@@ -41,6 +41,15 @@ final class InterceptingTerminalView: LocalProcessTerminalView {
     /// selection is cleared appropriately by keyDown and mouseDown instead.
     override func linefeed(source: Terminal) {}
 
+    /// Walk up the view hierarchy to find the owning TerminalWindowView.
+    var enclosingTerminalWindowView: TerminalWindowView? {
+        var view: NSView? = superview
+        while let v = view {
+            if let tw = v as? TerminalWindowView { return tw }
+            view = v.superview
+        }
+        return nil
+    }
 }
 
 private let titleBarHeight: CGFloat = 28
@@ -89,9 +98,9 @@ final class TerminalWindowView: NSView {
     // back to the main thread internally.
     private nonisolated(unsafe) var termView: InterceptingTerminalView!
     private var frameBeforeDrag: CGRect = .zero
-    private nonisolated(unsafe) var kittyArrowMonitor: Any?
-    private nonisolated(unsafe) var flagsMonitor: Any?
-    private var linkCursorPushed = false
+    // Shared event monitors — installed once, dispatch to the active terminal.
+    private static var sharedMonitorsInstalled = false
+    private static var sharedShiftBypassActive = false
 
     // MARK: - Canvas reference (for zoom-corrected drag)
 
@@ -111,10 +120,100 @@ final class TerminalWindowView: NSView {
 
     required init?(coder: NSCoder) { fatalError() }
 
-    deinit {
-        if let monitor = kittyArrowMonitor { NSEvent.removeMonitor(monitor) }
-        if let monitor = flagsMonitor { NSEvent.removeMonitor(monitor) }
+    /// Find the TerminalWindowView that owns the current first responder, if any.
+    private static func activeTerminalWindow(for event: NSEvent) -> (TerminalWindowView, InterceptingTerminalView)? {
+        guard let firstResponder = event.window?.firstResponder as? NSView else { return nil }
+        // Walk up the view hierarchy to find our InterceptingTerminalView and its parent.
+        var view: NSView? = firstResponder
+        while let v = view {
+            if let tv = v as? InterceptingTerminalView,
+               let tw = tv.enclosingTerminalWindowView {
+                return (tw, tv)
+            }
+            view = v.superview
+        }
+        return nil
     }
+
+    /// Install shared event monitors once. Each monitor finds the active terminal
+    /// via the first responder — O(1) per event regardless of terminal count.
+    private static func installSharedMonitors() {
+        guard !sharedMonitorsInstalled else { return }
+        sharedMonitorsInstalled = true
+
+        // Fix SwiftTerm/macOS interaction: macOS always sets .numericPad on cursor arrow
+        // keys. In kitty keyboard mode SwiftTerm uses that flag to distinguish keypad
+        // arrows from cursor arrows — causing cursor arrows to be sent as CSI 57419u/57420u
+        // (keypad) instead of CSI A/B (cursor). Strip .numericPad so SwiftTerm takes the
+        // cursor-arrow path. We can't override keyDown (not open), so we use a local monitor.
+        //
+        // TODO(2026-04-08): Re-evaluate whether this is still needed. Introduced as a
+        // workaround for a Claude Code v2.1.83 regression ("Fixed mouse tracking escape
+        // sequences leaking to shell prompt after exit") that caused kitty keyboard mode
+        // to be pushed to terminals not in the kitty allow-list. If CC has been fixed,
+        // remove this monitor.
+        NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            guard let (_, tv) = activeTerminalWindow(for: event) else { return event }
+
+            // Shift+Enter: send \x1b[13;2u (kitty keyboard protocol Shift+Enter).
+            if event.keyCode == 36, event.modifierFlags.contains(.shift) {
+                tv.send(data: [0x1B, 0x5B, 0x31, 0x33, 0x3B, 0x32, 0x75][...])
+                return nil
+            }
+
+            // numericPad fix: only applies when kitty keyboard mode is active.
+            guard !tv.terminal.keyboardEnhancementFlags.isEmpty,
+                  event.modifierFlags.contains(.numericPad),
+                  let cgOrig = event.cgEvent,
+                  let cgCopy = cgOrig.copy() else { return event }
+            cgCopy.flags = cgCopy.flags.subtracting(.maskNumericPad)
+            return NSEvent(cgEvent: cgCopy) ?? event
+        }
+
+        // Show a pointing-hand cursor when Cmd is held — matches SwiftTerm's link-underline
+        // behaviour.
+        NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { event in
+            guard activeTerminalWindow(for: event) != nil else {
+                // No active terminal — pop cursor if it was pushed.
+                if sharedLinkCursorPushed {
+                    NSCursor.pop()
+                    sharedLinkCursorPushed = false
+                }
+                return event
+            }
+            let cmdHeld = event.modifierFlags.contains(.command)
+            if cmdHeld && !sharedLinkCursorPushed {
+                NSCursor.pointingHand.push()
+                sharedLinkCursorPushed = true
+            } else if !cmdHeld && sharedLinkCursorPushed {
+                NSCursor.pop()
+                sharedLinkCursorPushed = false
+            }
+            return event
+        }
+
+        // Shift+click bypasses mouse reporting to force text selection.
+        NSEvent.addLocalMonitorForEvents(
+            matching: [.leftMouseDown, .leftMouseDragged, .leftMouseUp]
+        ) { event in
+            guard let (_, tv) = activeTerminalWindow(for: event) else { return event }
+            switch event.type {
+            case .leftMouseDown:
+                sharedShiftBypassActive = event.modifierFlags.contains(.shift)
+                if sharedShiftBypassActive { tv.allowMouseReporting = false }
+            case .leftMouseUp:
+                if sharedShiftBypassActive {
+                    tv.allowMouseReporting = TerminalSettings.shared.allowMouseReporting
+                    sharedShiftBypassActive = false
+                }
+            default:
+                break
+            }
+            return event
+        }
+    }
+
+    private static var sharedLinkCursorPushed = false
 
     // MARK: - Focus state
 
@@ -215,55 +314,7 @@ final class TerminalWindowView: NSView {
         // regardless of the system-wide appearance setting.
         termView.appearance = NSAppearance(named: .darkAqua)
 
-        // Fix SwiftTerm/macOS interaction: macOS always sets .numericPad on cursor arrow
-        // keys. In kitty keyboard mode SwiftTerm uses that flag to distinguish keypad
-        // arrows from cursor arrows — causing cursor arrows to be sent as CSI 57419u/57420u
-        // (keypad) instead of CSI A/B (cursor). Strip .numericPad so SwiftTerm takes the
-        // cursor-arrow path. We can't override keyDown (not open), so we use a local monitor.
-        //
-        // TODO(2026-04-08): Re-evaluate whether this is still needed. Introduced as a
-        // workaround for a Claude Code v2.1.83 regression ("Fixed mouse tracking escape
-        // sequences leaking to shell prompt after exit") that caused kitty keyboard mode
-        // to be pushed to terminals not in the kitty allow-list. If CC has been fixed,
-        // remove this monitor.
-        kittyArrowMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard let self,
-                  self.window?.firstResponder === self.termView else { return event }
-
-            // Shift+Enter: send \x1b[13;2u (kitty keyboard protocol Shift+Enter).
-            // Claude Code recognises this sequence natively (same as iTerm2/Ghostty).
-            // Must intercept unconditionally — SwiftTerm drops the Shift modifier when
-            // routing Return through doCommand(insertNewline:) regardless of kitty mode.
-            if event.keyCode == 36, event.modifierFlags.contains(.shift) {
-                self.termView.send(data: [0x1B, 0x5B, 0x31, 0x33, 0x3B, 0x32, 0x75][...])
-                return nil
-            }
-
-            // numericPad fix: only applies when kitty keyboard mode is active.
-            guard !self.termView.terminal.keyboardEnhancementFlags.isEmpty,
-                  event.modifierFlags.contains(.numericPad),
-                  let cgOrig = event.cgEvent,
-                  let cgCopy = cgOrig.copy() else { return event }
-            cgCopy.flags = cgCopy.flags.subtracting(.maskNumericPad)
-            return NSEvent(cgEvent: cgCopy) ?? event
-        }
-
-        // Show a pointing-hand cursor when Cmd is held — matches SwiftTerm's link-underline
-        // behaviour. cursorUpdate(with:) is public (not open) in SwiftTerm so we can't
-        // override it; use a flagsChanged monitor instead.
-        flagsMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
-            guard let self else { return event }
-            let cmdHeld = event.modifierFlags.contains(.command)
-            let overTerminal = self.window?.firstResponder === self.termView
-            if cmdHeld && overTerminal && !self.linkCursorPushed {
-                NSCursor.pointingHand.push()
-                self.linkCursorPushed = true
-            } else if (!cmdHeld || !overTerminal) && self.linkCursorPushed {
-                NSCursor.pop()
-                self.linkCursorPushed = false
-            }
-            return event
-        }
+        Self.installSharedMonitors()
 
         startProcess()
     }
