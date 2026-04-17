@@ -74,13 +74,15 @@ final class InterceptingTerminalView: LocalProcessTerminalView {
 
     static func trimTrailingSpacesPerLine(_ text: String) -> String {
         text.split(separator: "\n", omittingEmptySubsequences: false)
-            .map { $0.split(separator: "\r", omittingEmptySubsequences: false)
-                      .map { line -> String in
-                          var s = String(line)
-                          while s.last == " " { s.removeLast() }
-                          return s
-                      }
-                      .joined(separator: "\r") }
+            .map { segment -> String in
+                var s = String(segment)
+                // Preserve \r at end of line (CRLF) — strip it before trimming spaces, restore after.
+                let hadCR = s.hasSuffix("\r")
+                if hadCR { s.removeLast() }
+                while s.last == " " { s.removeLast() }
+                if hadCR { s.append("\r") }
+                return s
+            }
             .joined(separator: "\n")
     }
 
