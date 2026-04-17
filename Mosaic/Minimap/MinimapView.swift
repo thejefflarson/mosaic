@@ -24,6 +24,7 @@ final class MinimapView: FlippedView {
     private var annotationViews: [AnnotationView] = []
     private var currentViewport = Viewport()
     private var focusedWindowID: UUID?
+    private var flashingWindowIDs: Set<UUID> = []
 
     // Computed during render; used for click-to-pan
     private var worldExtent = CGRect(x: -200, y: -200, width: 2000, height: 1600)
@@ -46,6 +47,20 @@ final class MinimapView: FlippedView {
         layer?.cornerRadius = 6
         layer?.borderColor = NSColor(white: 0.3, alpha: 1).cgColor
         layer?.borderWidth = 1
+    }
+
+    /// Flash a terminal's minimap representation briefly.
+    /// Bypasses the render throttle so the flash is visible immediately.
+    func flashTerminal(id: UUID) {
+        flashingWindowIDs.insert(id)
+        renderSnapshot()
+        needsDisplay = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) { [weak self] in
+            guard let self else { return }
+            self.flashingWindowIDs.remove(id)
+            self.renderSnapshot()
+            self.needsDisplay = true
+        }
     }
 
     // MARK: - Update
@@ -123,10 +138,12 @@ final class MinimapView: FlippedView {
             annotImages.append((av.frame, img))
         }
         let focusedID = focusedWindowID
+        let flashing = flashingWindowIDs
         let windowFrames = windows.map { (
             frame: $0.frame,
             title: $0.currentTitle,
             isActive: $0.id == focusedID,
+            isFlashing: flashing.contains($0.id),
             bgColor: $0.theme.terminalBackground,
             fgColor: $0.theme.terminalForeground
         ) }
@@ -171,12 +188,16 @@ final class MinimapView: FlippedView {
                 let dotY = dest.minY + dotD * 0.8
                 NSColor(red: 0.9, green: 0.3, blue: 0.3, alpha: 0.9).setFill()
                 NSBezierPath(ovalIn: NSRect(x: dotX, y: dotY, width: dotD, height: dotD)).fill()
-                // Border — brighter for focused terminal, subtle otherwise (same thickness)
-                bodyPath.lineWidth = 0.5
-                if wf.isActive {
+                // Border — green for flashing, bright for focused, subtle otherwise
+                if wf.isFlashing {
+                    bodyPath.lineWidth = 2.0
+                    NSColor.systemGreen.setStroke()
+                } else if wf.isActive {
+                    bodyPath.lineWidth = 0.5
                     let dark = wf.bgColor.isPerceivedDark
                     NSColor(white: dark ? 1.0 : 0.0, alpha: 0.9).setStroke()
                 } else {
+                    bodyPath.lineWidth = 0.5
                     wf.fgColor.withAlphaComponent(0.2).setStroke()
                 }
                 bodyPath.stroke()

@@ -646,7 +646,17 @@ final class ImageAnnotationView: AnnotationView {
     required init?(coder: NSCoder) { fatalError() }
 
     private func setup(image: NSImage) {
-        imageView.image = image
+        // Force-decode the image to a CGImage-backed NSImage. NSImage defers
+        // decoding until draw time, which makes HEIC (and other heavy codecs)
+        // re-decode on every scroll frame and tanks performance.
+        let decoded: NSImage
+        if image.size.width > 0, image.size.height > 0,
+           let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil) {
+            decoded = NSImage(cgImage: cg, size: image.size)
+        } else {
+            decoded = image
+        }
+        imageView.image = decoded
         imageView.imageScaling = .scaleProportionallyUpOrDown
         imageView.translatesAutoresizingMaskIntoConstraints = false
         addSubview(imageView)

@@ -10,6 +10,8 @@ final class TerminalSettingsModel: ObservableObject {
     @Published var backspaceSendsControlH: Bool
     @Published var allowMouseReporting: Bool
     @Published var useBrightColors: Bool
+    @Published var panOnBell: Bool
+    @Published var flashOnBell: Bool
 
     var onApply: ((TerminalSettings) -> Void)?
 
@@ -21,6 +23,8 @@ final class TerminalSettingsModel: ObservableObject {
         backspaceSendsControlH = s.backspaceSendsControlH
         allowMouseReporting    = s.allowMouseReporting
         useBrightColors        = s.useBrightColors
+        panOnBell              = s.panOnBell
+        flashOnBell            = s.flashOnBell
     }
 
     func buildSettings() -> TerminalSettings {
@@ -31,6 +35,8 @@ final class TerminalSettingsModel: ObservableObject {
         s.backspaceSendsControlH = backspaceSendsControlH
         s.allowMouseReporting    = allowMouseReporting
         s.useBrightColors        = useBrightColors
+        s.panOnBell              = panOnBell
+        s.flashOnBell            = flashOnBell
         return s
     }
 }
@@ -76,6 +82,15 @@ struct TerminalSettingsView: View {
                     .help("When off, bold text renders in bold weight using the normal colour.")
             } header: {
                 Text("Input & Rendering")
+            }
+
+            Section {
+                Toggle("Flash terminal border on bell", isOn: $model.flashOnBell)
+                    .help("Briefly flash the terminal border when it emits a bell or notification.")
+                Toggle("Pan to terminal on bell", isOn: $model.panOnBell)
+                    .help("Automatically pan the canvas to a terminal when it emits a bell or OSC notification.")
+            } header: {
+                Text("Notifications")
             }
         }
         .formStyle(.grouped)

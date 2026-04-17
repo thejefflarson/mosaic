@@ -1,5 +1,6 @@
 import AppKit
 import CoreVideo
+import UserNotifications
 import os
 
 // MARK: - Snap guide overlay
@@ -141,6 +142,12 @@ final class CanvasViewController: NSViewController {
         }
         terminalController.onMoveEnded = { [weak self] _ in
             self?.registerPeerUndos()
+        }
+        terminalController.onBell = { [weak self] tw in
+            self?.handleTerminalBell(tw)
+        }
+        terminalController.onNotification = { [weak self] tw, title, body in
+            self?.handleTerminalNotification(tw, title: title, body: body)
         }
         annotationController = AnnotationController(
             canvasView: canvasView,
@@ -841,6 +848,60 @@ final class CanvasViewController: NSViewController {
         vp.panX = -paddedUnion.minX * zoom + (canvasView.bounds.width - paddedUnion.width * zoom) / 2
         vp.panY = -paddedUnion.minY * zoom + (canvasView.bounds.height - paddedUnion.height * zoom) / 2
         canvasView.setViewport(vp)
+    }
+
+    // MARK: - Bell notification
+
+    private func handleTerminalBell(_ tw: TerminalWindowView) {
+        let settings = TerminalSettings.shared
+        let isActive = canvasView.activeTerminal === tw
+        let appActive = NSApp.isActive
+        if settings.flashOnBell {
+            tw.flashBorder()
+            minimapView.flashTerminal(id: tw.id)
+        }
+        if settings.panOnBell && (!isActive || !appActive) {
+            panToTerminal(tw)
+        }
+        guard !appActive else { return }
+        let content = UNMutableNotificationContent()
+        content.title = tw.currentTitle.isEmpty ? "Mosaic" : tw.currentTitle
+        content.body = "Terminal needs attention"
+        content.sound = .default
+        let request = UNNotificationRequest(identifier: UUID().uuidString,
+                                            content: content, trigger: nil)
+        UNUserNotificationCenter.current().add(request)
+    }
+
+    private func handleTerminalNotification(_ tw: TerminalWindowView, title: String, body: String) {
+        let settings = TerminalSettings.shared
+        let isActive = canvasView.activeTerminal === tw
+        if settings.flashOnBell {
+            tw.flashBorder()
+            minimapView.flashTerminal(id: tw.id)
+        }
+        if settings.panOnBell && !isActive {
+            panToTerminal(tw)
+        }
+        guard !NSApp.isActive else { return }
+        let content = UNMutableNotificationContent()
+        content.title = title.isEmpty ? (tw.currentTitle.isEmpty ? "Mosaic" : tw.currentTitle) : title
+        content.body = body
+        content.sound = .default
+        let request = UNNotificationRequest(identifier: UUID().uuidString,
+                                            content: content, trigger: nil)
+        UNUserNotificationCenter.current().add(request)
+    }
+
+    private func panToTerminal(_ tw: TerminalWindowView) {
+        let worldCenter = CGPoint(x: tw.frame.midX, y: tw.frame.midY)
+        let screenCenter = CGPoint(x: canvasView.bounds.midX, y: canvasView.bounds.midY)
+        var vp = canvasView.viewport
+        vp.panX = screenCenter.x - worldCenter.x * vp.zoom
+        vp.panY = screenCenter.y - worldCenter.y * vp.zoom
+        canvasView.setViewport(vp)
+        canvasView.activateTerminal(tw)
+        tw.focusTerminal()
     }
 }
 

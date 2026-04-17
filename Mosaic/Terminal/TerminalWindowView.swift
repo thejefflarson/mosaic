@@ -41,6 +41,56 @@ final class InterceptingTerminalView: LocalProcessTerminalView {
     /// selection is cleared appropriately by keyDown and mouseDown instead.
     override func linefeed(source: Terminal) {}
 
+    /// SwiftTerm's feedPrepare() clears selection when allowMouseReporting is true,
+    /// which kills any active selection every time terminal data arrives. Temporarily
+    /// disable allowMouseReporting around the feed so the selection persists — the
+    /// same approach iTerm2 and Terminal.app use to keep selection alive during output.
+    override func dataReceived(slice: ArraySlice<UInt8>) {
+        let wasReporting = allowMouseReporting
+        if wasReporting && selectionActive {
+            allowMouseReporting = false
+        }
+        super.dataReceived(slice: slice)
+        if wasReporting && !allowMouseReporting {
+            allowMouseReporting = wasReporting
+        }
+    }
+
+    /// Callback fired when the terminal emits a BEL character (0x07).
+    /// Claude Code sends BEL on task completion; iTerm2 uses this for dock bounce.
+    var onBell: (() -> Void)?
+
+    /// Trim trailing whitespace from each copied line. SwiftTerm includes empty
+    /// cells (padded with spaces) past the last printed character on each row,
+    /// which is almost never what the user wants on the clipboard.
+    override func copy(_ sender: Any) {
+        let raw = getSelection() ?? ""
+        guard !raw.isEmpty else {
+            super.copy(sender)
+            return
+        }
+        let trimmed = raw
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .map { $0.split(separator: "\r", omittingEmptySubsequences: false)
+                      .map { line -> String in
+                          var s = String(line)
+                          while s.last == " " { s.removeLast() }
+                          return s
+                      }
+                      .joined(separator: "\r") }
+            .joined(separator: "\n")
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString(trimmed, forType: .string)
+    }
+
+    override func bell(source: Terminal) {
+        super.bell(source: source)
+        Task { @MainActor [weak self] in
+            self?.onBell?()
+        }
+    }
+
     /// Walk up the view hierarchy to find the owning TerminalWindowView.
     var enclosingTerminalWindowView: TerminalWindowView? {
         var view: NSView? = superview
@@ -86,6 +136,19 @@ final class TerminalWindowView: NSView {
     var onDragDelta: ((CGFloat, CGFloat) -> Void)?
     /// Fired when a title-bar drag gesture begins; used for group-move undo capture.
     var onDragBegan: (() -> Void)?
+    /// Fired when the terminal emits BEL (e.g. task completion notification).
+    var onBell: (() -> Void)?
+    /// Fired on OSC 9 notification or OSC 777 notification.
+    var onNotification: ((String, String) -> Void)?
+    /// Fired on OSC 133 shell integration markers (A=prompt, B=command start, C=executed, D=finished).
+    var onShellIntegration: ((ShellIntegrationEvent) -> Void)?
+
+    enum ShellIntegrationEvent {
+        case promptStart
+        case commandStart
+        case commandExecuted
+        case commandFinished(exitCode: Int?)
+    }
 
     /// Active theme — applied 0.8 s after process start (after shell init sequences).
     var theme: Theme = .dark
@@ -100,7 +163,6 @@ final class TerminalWindowView: NSView {
     private var frameBeforeDrag: CGRect = .zero
     // Shared event monitors — installed once, dispatch to the active terminal.
     private static var sharedMonitorsInstalled = false
-    private static var sharedShiftBypassActive = false
 
     // MARK: - Canvas reference (for zoom-corrected drag)
 
@@ -170,50 +232,79 @@ final class TerminalWindowView: NSView {
             return NSEvent(cgEvent: cgCopy) ?? event
         }
 
-        // Show a pointing-hand cursor when Cmd is held — matches SwiftTerm's link-underline
-        // behaviour.
-        NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { event in
-            guard activeTerminalWindow(for: event) != nil else {
-                // No active terminal — pop cursor if it was pushed.
-                if sharedLinkCursorPushed {
-                    NSCursor.pop()
-                    sharedLinkCursorPushed = false
+        // Link hover: show pointing-hand cursor automatically over OSC 8 hyperlinks
+        // (matches Ghostty/web-browser convention). SwiftTerm sets I-beam in its own
+        // mouseMoved; we dispatch async so our cursor set runs AFTER SwiftTerm's.
+        NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved, .flagsChanged]) { event in
+            guard let (_, tv) = activeTerminalWindow(for: event) else {
+                if sharedLinkCursorActive {
+                    sharedLinkCursorActive = false
                 }
                 return event
             }
-            let cmdHeld = event.modifierFlags.contains(.command)
-            if cmdHeld && !sharedLinkCursorPushed {
-                NSCursor.pointingHand.push()
-                sharedLinkCursorPushed = true
-            } else if !cmdHeld && sharedLinkCursorPushed {
-                NSCursor.pop()
-                sharedLinkCursorPushed = false
+            let overLink: Bool
+            if event.type == .mouseMoved {
+                overLink = isOverLink(event: event, termView: tv)
+            } else {
+                // flagsChanged — reuse current state but re-evaluate via mouse position.
+                if let win = event.window {
+                    overLink = isOverLink(at: win.mouseLocationOutsideOfEventStream, termView: tv)
+                } else {
+                    overLink = sharedLinkCursorActive
+                }
+            }
+            let transitioned = overLink != sharedLinkCursorActive
+            sharedLinkCursorActive = overLink
+            if overLink {
+                // Set cursor AFTER SwiftTerm's mouseMoved delivers I-beam.
+                DispatchQueue.main.async {
+                    guard sharedLinkCursorActive else { return }
+                    NSCursor.pointingHand.set()
+                }
+            } else if transitioned {
+                // Leaving a link — restore I-beam (SwiftTerm's default over terminal text).
+                DispatchQueue.main.async {
+                    guard !sharedLinkCursorActive else { return }
+                    NSCursor.iBeam.set()
+                }
             }
             return event
         }
 
-        // Shift+click bypasses mouse reporting to force text selection.
-        NSEvent.addLocalMonitorForEvents(
-            matching: [.leftMouseDown, .leftMouseDragged, .leftMouseUp]
-        ) { event in
-            guard let (_, tv) = activeTerminalWindow(for: event) else { return event }
-            switch event.type {
-            case .leftMouseDown:
-                sharedShiftBypassActive = event.modifierFlags.contains(.shift)
-                if sharedShiftBypassActive { tv.allowMouseReporting = false }
-            case .leftMouseUp:
-                if sharedShiftBypassActive {
-                    tv.allowMouseReporting = TerminalSettings.shared.allowMouseReporting
-                    sharedShiftBypassActive = false
-                }
-            default:
-                break
-            }
-            return event
-        }
     }
 
-    private static var sharedLinkCursorPushed = false
+    private static func isOverLink(event: NSEvent, termView: InterceptingTerminalView) -> Bool {
+        let local = termView.convert(event.locationInWindow, from: nil)
+        return isOverLink(local: local, termView: termView)
+    }
+
+    private static func isOverLink(at windowPoint: NSPoint, termView: InterceptingTerminalView) -> Bool {
+        // Convert window-space point into the termView's local coordinates.
+        guard let win = termView.window else { return false }
+        let screenPoint = win.convertPoint(toScreen: windowPoint)
+        let winPoint = win.convertPoint(fromScreen: screenPoint)
+        let local = termView.convert(winPoint, from: nil)
+        return isOverLink(local: local, termView: termView)
+    }
+
+    private static func isOverLink(local: NSPoint, termView: InterceptingTerminalView) -> Bool {
+        let bounds = termView.bounds
+        guard bounds.contains(local) else { return false }
+        let terminal = termView.getTerminal()
+        let cols = terminal.cols
+        let rows = terminal.rows
+        guard cols > 0, rows > 0 else { return false }
+        let cellW = bounds.width / CGFloat(cols)
+        let cellH = bounds.height / CGFloat(rows)
+        guard cellW > 0, cellH > 0 else { return false }
+        let col = min(max(0, Int(local.x / cellW)), cols - 1)
+        // termView is NOT flipped — y=0 is bottom. Terminal row 0 is top.
+        let row = min(max(0, Int((bounds.height - local.y) / cellH)), rows - 1)
+        return terminal.link(at: .screen(Position(col: col, row: row)),
+                             mode: .explicitAndImplicit) != nil
+    }
+
+    private static var sharedLinkCursorActive = false
 
     // MARK: - Focus state
 
@@ -221,6 +312,19 @@ final class TerminalWindowView: NSView {
         didSet { updateBorder() }
     }
     var isBroadcast: Bool = false
+
+    /// Flash the border a highlight color, pulsing a couple of times before restoring.
+    func flashBorder() {
+        guard let layer else { return }
+        let original = layer.borderColor
+        let highlight = NSColor.systemGreen.cgColor
+        let flash = CAKeyframeAnimation(keyPath: "borderColor")
+        flash.values = [original as Any, highlight, original as Any, highlight, original as Any]
+        flash.keyTimes = [0, 0.15, 0.5, 0.65, 1]
+        flash.duration = 1.6
+        flash.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        layer.add(flash, forKey: "bellFlash")
+    }
 
     private func updateBorder() {
         let dark = theme.terminalBackground.isPerceivedDark
@@ -298,6 +402,7 @@ final class TerminalWindowView: NSView {
                 self?.onBroadcastKey?(bytes)
             }
         }
+        termView.onBell = { [weak self] in self?.onBell?() }
         termView.nativeForegroundColor = theme.terminalForeground
         termView.nativeBackgroundColor = theme.terminalBackground
         addSubview(termView)
@@ -314,9 +419,59 @@ final class TerminalWindowView: NSView {
         // regardless of the system-wide appearance setting.
         termView.appearance = NSAppearance(named: .darkAqua)
 
+        registerOSCHandlers()
         Self.installSharedMonitors()
 
         startProcess()
+    }
+
+    // MARK: - OSC handlers
+
+    private func registerOSCHandlers() {
+        let terminal = termView.getTerminal()
+
+        // OSC 9 — NOT overridden. SwiftTerm handles OSC 9;4 (progress bar) natively
+        // and oscProgressReport is internal. Plain OSC 9 notifications are rare;
+        // Claude Code uses BEL and OSC 777 instead.
+
+        // OSC 777 — notify;title;body
+        // SwiftTerm parses this but the delegate is a protocol extension no-op.
+        // Override via parser handler.
+        terminal.parser.oscHandlers[777] = { [weak self] data in
+            let text = String(bytes: data, encoding: .utf8) ?? ""
+            let parts = text.split(separator: ";", maxSplits: 2).map(String.init)
+            guard parts.first == "notify", parts.count >= 2 else { return }
+            let title = parts.count >= 2 ? parts[1] : ""
+            let body  = parts.count >= 3 ? parts[2] : ""
+            Task { @MainActor [weak self] in
+                self?.onNotification?(title, body)
+            }
+        }
+
+        // OSC 133 — FinalTerm shell integration.
+        // A=prompt start, B=command start, C=command executed, D;exitcode=command finished
+        terminal.parser.oscHandlers[133] = { [weak self] data in
+            let text = String(bytes: data, encoding: .utf8) ?? ""
+            let event: ShellIntegrationEvent?
+            if text.hasPrefix("A") {
+                event = .promptStart
+            } else if text.hasPrefix("B") {
+                event = .commandStart
+            } else if text.hasPrefix("C") {
+                event = .commandExecuted
+            } else if text.hasPrefix("D") {
+                let parts = text.split(separator: ";", maxSplits: 1)
+                let exitCode = parts.count > 1 ? Int(parts[1]) : nil
+                event = .commandFinished(exitCode: exitCode)
+            } else {
+                event = nil
+            }
+            if let event {
+                Task { @MainActor [weak self] in
+                    self?.onShellIntegration?(event)
+                }
+            }
+        }
     }
 
     /// Extract up to `maxLines` of scrollback + visible screen content as plain text.

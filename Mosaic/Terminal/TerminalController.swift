@@ -28,6 +28,10 @@ final class TerminalController {
     var onDragBegan: ((TerminalWindowView) -> Void)?
     /// Called after a terminal's undo action is registered; used to register group-move peer undos.
     var onMoveEnded: ((TerminalWindowView) -> Void)?
+    /// Called when a terminal emits BEL (e.g. Claude Code task completion).
+    var onBell: ((TerminalWindowView) -> Void)?
+    /// Called on OSC 9/777 notification with (terminal, title, body).
+    var onNotification: ((TerminalWindowView, String, String) -> Void)?
 
     // MARK: - State
 
@@ -122,6 +126,16 @@ final class TerminalController {
 
         tw.onBroadcastKey = { [weak self] data in
             self?.broadcastKey(data, excluding: tw)
+        }
+
+        tw.onBell = { [weak self, weak tw] in
+            guard let self, let tw else { return }
+            onBell?(tw)
+        }
+
+        tw.onNotification = { [weak self, weak tw] title, body in
+            guard let self, let tw else { return }
+            onNotification?(tw, title, body)
         }
 
         cv.addTerminal(tw)

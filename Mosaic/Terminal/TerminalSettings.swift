@@ -17,6 +17,10 @@ struct TerminalSettings: Codable {
     var allowMouseReporting: Bool = true
     /// Use bright ANSI colours for bold text instead of rendering bold weight.
     var useBrightColors: Bool = true
+    /// Pan the canvas to a terminal when it emits a bell or notification.
+    var panOnBell: Bool = false
+    /// Flash the terminal border on bell / notification.
+    var flashOnBell: Bool = true
 
     // MARK: - Persistence
 

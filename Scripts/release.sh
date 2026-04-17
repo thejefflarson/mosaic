@@ -58,6 +58,21 @@ if git status --porcelain | grep -q .; then
     exit 1
 fi
 
+# hdiutil preflight: fail fast if disk-image creation is blocked (sandbox or TCC),
+# so we don't waste a ~2 minute archive build only to hit the error later.
+HDIUTIL_TEST_DIR=$(mktemp -d /tmp/mosaic-hdiutil-test.XXXXXX)
+HDIUTIL_TEST_DMG=$(mktemp -u /tmp/mosaic-hdiutil-test.XXXXXX.dmg)
+trap 'rm -rf "$BUILD_DIR" "$HDIUTIL_TEST_DIR" "$HDIUTIL_TEST_DMG"' EXIT
+if ! hdiutil create -volname "test" -srcfolder "$HDIUTIL_TEST_DIR" \
+        -ov -format UDZO "$HDIUTIL_TEST_DMG" &>/dev/null; then
+    echo "error: hdiutil cannot create disk images in this shell"
+    echo "  cause: macOS TCC or a sandboxed shell (e.g. ziplock) is blocking it"
+    echo "  fix:   run this script from a plain Terminal.app session, and if needed"
+    echo "         grant Terminal Full Disk Access in System Settings → Privacy & Security"
+    exit 1
+fi
+rm -rf "$HDIUTIL_TEST_DIR" "$HDIUTIL_TEST_DMG"
+
 echo "releasing $APP_NAME $VERSION"
 SHORT_VERSION="${VERSION#v}"
 
