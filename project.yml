@@ -3,8 +3,16 @@ options:
   bundleIdPrefix: com.jeff
   deploymentTarget:
     macOS: "14.0"
-  xcodeVersion: "15"
+  xcodeVersion: "16"
   createIntermediateGroups: true
+
+settings:
+  base:
+    DEAD_CODE_STRIPPING: YES
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+    ASSETCATALOG_COMPILER_GENERATE_ASSET_SYMBOLS: YES
+    ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS: YES
+    STRING_CATALOG_GENERATE_SYMBOLS: YES
 
 packages:
   SwiftTerm:
@@ -77,6 +85,11 @@ targets:
         SWIFT_STRICT_CONCURRENCY: complete
         PRODUCT_NAME: Mosaic
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        DEAD_CODE_STRIPPING: YES
+        ENABLE_USER_SCRIPT_SANDBOXING: YES
+        ASSETCATALOG_COMPILER_GENERATE_ASSET_SYMBOLS: YES
+        ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS: YES
+        STRING_CATALOG_GENERATE_SYMBOLS: YES
     dependencies:
       - package: SwiftTerm
       - package: Sparkle
@@ -92,5 +105,7 @@ targets:
         SWIFT_VERSION: "6.0"
         MACOSX_DEPLOYMENT_TARGET: "14.0"
         GENERATE_INFOPLIST_FILE: YES
+        DEAD_CODE_STRIPPING: YES
+        ENABLE_USER_SCRIPT_SANDBOXING: YES
     dependencies:
       - target: Mosaic
