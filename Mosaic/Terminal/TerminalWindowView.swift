@@ -56,8 +56,6 @@ final class InterceptingTerminalView: LocalProcessTerminalView {
         }
     }
 
-    /// Callback fired when the terminal emits a BEL character (0x07).
-    /// Claude Code sends BEL on task completion; iTerm2 uses this for dock bounce.
     var onBell: (() -> Void)?
 
     /// Trim trailing whitespace from each copied line. SwiftTerm includes empty
@@ -69,8 +67,13 @@ final class InterceptingTerminalView: LocalProcessTerminalView {
             super.copy(sender)
             return
         }
-        let trimmed = raw
-            .split(separator: "\n", omittingEmptySubsequences: false)
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString(Self.trimTrailingSpacesPerLine(raw), forType: .string)
+    }
+
+    static func trimTrailingSpacesPerLine(_ text: String) -> String {
+        text.split(separator: "\n", omittingEmptySubsequences: false)
             .map { $0.split(separator: "\r", omittingEmptySubsequences: false)
                       .map { line -> String in
                           var s = String(line)
@@ -79,9 +82,29 @@ final class InterceptingTerminalView: LocalProcessTerminalView {
                       }
                       .joined(separator: "\r") }
             .joined(separator: "\n")
-        let pb = NSPasteboard.general
-        pb.clearContents()
-        pb.setString(trimmed, forType: .string)
+    }
+
+    /// Parse an OSC 777 payload (minus the "777;" prefix) into (title, body).
+    /// Format: `notify;<title>;<body>`. Returns nil for malformed payloads.
+    static func parseOSC777(_ text: String) -> (title: String, body: String)? {
+        let parts = text.split(separator: ";", maxSplits: 2,
+                               omittingEmptySubsequences: false).map(String.init)
+        guard parts.first == "notify", parts.count >= 2 else { return nil }
+        return (title: parts[1], body: parts.count >= 3 ? parts[2] : "")
+    }
+
+    /// Parse an OSC 133 payload. We currently only care about `D` (command finished).
+    /// Returns the exit code when the payload starts with `D` (nil if none specified),
+    /// or `nil` for any other 133 marker.
+    enum OSC133Event: Equatable {
+        case commandFinished(exitCode: Int?)
+    }
+
+    static func parseOSC133(_ text: String) -> OSC133Event? {
+        guard text.hasPrefix("D") else { return nil }
+        let parts = text.split(separator: ";", maxSplits: 1)
+        let exit = parts.count > 1 ? Int(parts[1]) : nil
+        return .commandFinished(exitCode: exit)
     }
 
     override func bell(source: Terminal) {
@@ -91,8 +114,7 @@ final class InterceptingTerminalView: LocalProcessTerminalView {
         }
     }
 
-    /// Walk up the view hierarchy to find the owning TerminalWindowView.
-    var enclosingTerminalWindowView: TerminalWindowView? {
+    fileprivate var enclosingTerminalWindowView: TerminalWindowView? {
         var view: NSView? = superview
         while let v = view {
             if let tw = v as? TerminalWindowView { return tw }
@@ -136,19 +158,12 @@ final class TerminalWindowView: NSView {
     var onDragDelta: ((CGFloat, CGFloat) -> Void)?
     /// Fired when a title-bar drag gesture begins; used for group-move undo capture.
     var onDragBegan: (() -> Void)?
-    /// Fired when the terminal emits BEL (e.g. task completion notification).
     var onBell: (() -> Void)?
-    /// Fired on OSC 9 notification or OSC 777 notification.
+    /// (title, body) from OSC 9 / OSC 777.
     var onNotification: ((String, String) -> Void)?
-    /// Fired on OSC 133 shell integration markers (A=prompt, B=command start, C=executed, D=finished).
-    var onShellIntegration: ((ShellIntegrationEvent) -> Void)?
-
-    enum ShellIntegrationEvent {
-        case promptStart
-        case commandStart
-        case commandExecuted
-        case commandFinished(exitCode: Int?)
-    }
+    /// Fires when a shell with OSC 133 integration finishes a command.
+    /// `exitCode` is nil when the shell didn't report one (e.g. D without params).
+    var onCommandFinished: ((_ exitCode: Int?) -> Void)?
 
     /// Active theme — applied 0.8 s after process start (after shell init sequences).
     var theme: Theme = .dark
@@ -237,74 +252,61 @@ final class TerminalWindowView: NSView {
         // mouseMoved; we dispatch async so our cursor set runs AFTER SwiftTerm's.
         NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved, .flagsChanged]) { event in
             guard let (_, tv) = activeTerminalWindow(for: event) else {
-                if sharedLinkCursorActive {
-                    sharedLinkCursorActive = false
-                }
+                sharedLinkCursorActive = false
+                lastLinkHit = nil
                 return event
             }
-            let overLink: Bool
+            let windowPoint: NSPoint
             if event.type == .mouseMoved {
-                overLink = isOverLink(event: event, termView: tv)
+                windowPoint = event.locationInWindow
+            } else if let win = event.window {
+                windowPoint = win.mouseLocationOutsideOfEventStream
             } else {
-                // flagsChanged — reuse current state but re-evaluate via mouse position.
-                if let win = event.window {
-                    overLink = isOverLink(at: win.mouseLocationOutsideOfEventStream, termView: tv)
-                } else {
-                    overLink = sharedLinkCursorActive
-                }
+                return event
             }
-            let transitioned = overLink != sharedLinkCursorActive
+            let local = tv.convert(windowPoint, from: nil)
+            guard let cell = cellAt(local: local, termView: tv) else {
+                if sharedLinkCursorActive {
+                    sharedLinkCursorActive = false
+                    DispatchQueue.main.async { NSCursor.iBeam.set() }
+                }
+                lastLinkHit = nil
+                return event
+            }
+            // Skip the link lookup if the cursor hasn't moved to a different cell.
+            if let last = lastLinkHit, last == cell { return event }
+            lastLinkHit = cell
+            let overLink = tv.getTerminal().link(
+                at: .screen(Position(col: cell.col, row: cell.row)),
+                mode: .explicitAndImplicit) != nil
+            guard overLink != sharedLinkCursorActive else { return event }
             sharedLinkCursorActive = overLink
-            if overLink {
-                // Set cursor AFTER SwiftTerm's mouseMoved delivers I-beam.
-                DispatchQueue.main.async {
-                    guard sharedLinkCursorActive else { return }
-                    NSCursor.pointingHand.set()
-                }
-            } else if transitioned {
-                // Leaving a link — restore I-beam (SwiftTerm's default over terminal text).
-                DispatchQueue.main.async {
-                    guard !sharedLinkCursorActive else { return }
-                    NSCursor.iBeam.set()
-                }
+            // Set cursor AFTER SwiftTerm's mouseMoved delivers I-beam.
+            DispatchQueue.main.async {
+                (overLink ? NSCursor.pointingHand : NSCursor.iBeam).set()
             }
             return event
         }
 
     }
 
-    private static func isOverLink(event: NSEvent, termView: InterceptingTerminalView) -> Bool {
-        let local = termView.convert(event.locationInWindow, from: nil)
-        return isOverLink(local: local, termView: termView)
-    }
-
-    private static func isOverLink(at windowPoint: NSPoint, termView: InterceptingTerminalView) -> Bool {
-        // Convert window-space point into the termView's local coordinates.
-        guard let win = termView.window else { return false }
-        let screenPoint = win.convertPoint(toScreen: windowPoint)
-        let winPoint = win.convertPoint(fromScreen: screenPoint)
-        let local = termView.convert(winPoint, from: nil)
-        return isOverLink(local: local, termView: termView)
-    }
-
-    private static func isOverLink(local: NSPoint, termView: InterceptingTerminalView) -> Bool {
+    private static func cellAt(local: NSPoint, termView: InterceptingTerminalView) -> (col: Int, row: Int)? {
         let bounds = termView.bounds
-        guard bounds.contains(local) else { return false }
+        guard bounds.contains(local) else { return nil }
         let terminal = termView.getTerminal()
-        let cols = terminal.cols
-        let rows = terminal.rows
-        guard cols > 0, rows > 0 else { return false }
+        let cols = terminal.cols, rows = terminal.rows
+        guard cols > 0, rows > 0 else { return nil }
         let cellW = bounds.width / CGFloat(cols)
         let cellH = bounds.height / CGFloat(rows)
-        guard cellW > 0, cellH > 0 else { return false }
+        guard cellW > 0, cellH > 0 else { return nil }
         let col = min(max(0, Int(local.x / cellW)), cols - 1)
         // termView is NOT flipped — y=0 is bottom. Terminal row 0 is top.
         let row = min(max(0, Int((bounds.height - local.y) / cellH)), rows - 1)
-        return terminal.link(at: .screen(Position(col: col, row: row)),
-                             mode: .explicitAndImplicit) != nil
+        return (col, row)
     }
 
     private static var sharedLinkCursorActive = false
+    private static var lastLinkHit: (col: Int, row: Int)?
 
     // MARK: - Focus state
 
@@ -313,11 +315,11 @@ final class TerminalWindowView: NSView {
     }
     var isBroadcast: Bool = false
 
-    /// Flash the border a highlight color, pulsing a couple of times before restoring.
-    func flashBorder() {
+    /// Flash the border a highlight color, pulsing twice before restoring.
+    func flashBorder(color: NSColor = .systemGreen) {
         guard let layer else { return }
         let original = layer.borderColor
-        let highlight = NSColor.systemGreen.cgColor
+        let highlight = color.cgColor
         let flash = CAKeyframeAnimation(keyPath: "borderColor")
         flash.values = [original as Any, highlight, original as Any, highlight, original as Any]
         flash.keyTimes = [0, 0.15, 0.5, 0.65, 1]
@@ -439,36 +441,21 @@ final class TerminalWindowView: NSView {
         // Override via parser handler.
         terminal.parser.oscHandlers[777] = { [weak self] data in
             let text = String(bytes: data, encoding: .utf8) ?? ""
-            let parts = text.split(separator: ";", maxSplits: 2).map(String.init)
-            guard parts.first == "notify", parts.count >= 2 else { return }
-            let title = parts.count >= 2 ? parts[1] : ""
-            let body  = parts.count >= 3 ? parts[2] : ""
+            guard let parsed = InterceptingTerminalView.parseOSC777(text) else { return }
             Task { @MainActor [weak self] in
-                self?.onNotification?(title, body)
+                self?.onNotification?(parsed.title, parsed.body)
             }
         }
 
-        // OSC 133 — FinalTerm shell integration.
-        // A=prompt start, B=command start, C=command executed, D;exitcode=command finished
+        // OSC 133 — FinalTerm shell integration. We only care about D (command
+        // finished); A/B/C mark prompt/command boundaries we don't act on yet.
         terminal.parser.oscHandlers[133] = { [weak self] data in
             let text = String(bytes: data, encoding: .utf8) ?? ""
-            let event: ShellIntegrationEvent?
-            if text.hasPrefix("A") {
-                event = .promptStart
-            } else if text.hasPrefix("B") {
-                event = .commandStart
-            } else if text.hasPrefix("C") {
-                event = .commandExecuted
-            } else if text.hasPrefix("D") {
-                let parts = text.split(separator: ";", maxSplits: 1)
-                let exitCode = parts.count > 1 ? Int(parts[1]) : nil
-                event = .commandFinished(exitCode: exitCode)
-            } else {
-                event = nil
-            }
-            if let event {
+            guard let event = InterceptingTerminalView.parseOSC133(text) else { return }
+            switch event {
+            case .commandFinished(let exit):
                 Task { @MainActor [weak self] in
-                    self?.onShellIntegration?(event)
+                    self?.onCommandFinished?(exit)
                 }
             }
         }

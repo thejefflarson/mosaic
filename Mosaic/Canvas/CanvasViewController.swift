@@ -149,6 +149,9 @@ final class CanvasViewController: NSViewController {
         terminalController.onNotification = { [weak self] tw, title, body in
             self?.handleTerminalNotification(tw, title: title, body: body)
         }
+        terminalController.onCommandFinished = { [weak self] tw, exitCode in
+            self?.handleCommandFinished(tw, exitCode: exitCode)
+        }
         annotationController = AnnotationController(
             canvasView: canvasView,
             undoManager: { [weak self] in self?.undoManager },
@@ -853,6 +856,25 @@ final class CanvasViewController: NSViewController {
     // MARK: - Bell notification
 
     private func handleTerminalBell(_ tw: TerminalWindowView) {
+        notifyAttention(tw, title: nil, body: "Terminal needs attention")
+    }
+
+    private func handleTerminalNotification(_ tw: TerminalWindowView, title: String, body: String) {
+        notifyAttention(tw, title: title.isEmpty ? nil : title, body: body)
+    }
+
+    /// OSC 133 D — the shell reports a command finished. Green flash on success,
+    /// red on failure; no notification banner (this fires on every prompt so it
+    /// would be noisy). More precise than BEL since it fires exactly on the
+    /// command boundary.
+    private func handleCommandFinished(_ tw: TerminalWindowView, exitCode: Int?) {
+        guard TerminalSettings.shared.flashOnBell else { return }
+        let color: NSColor = (exitCode ?? 0) == 0 ? .systemGreen : .systemRed
+        tw.flashBorder(color: color)
+        minimapView.flashTerminal(id: tw.id, color: color)
+    }
+
+    private func notifyAttention(_ tw: TerminalWindowView, title: String?, body: String) {
         let settings = TerminalSettings.shared
         let isActive = canvasView.activeTerminal === tw
         let appActive = NSApp.isActive
@@ -861,47 +883,16 @@ final class CanvasViewController: NSViewController {
             minimapView.flashTerminal(id: tw.id)
         }
         if settings.panOnBell && (!isActive || !appActive) {
-            panToTerminal(tw)
+            terminalController.snapViewportToTerminal(tw)
         }
         guard !appActive else { return }
         let content = UNMutableNotificationContent()
-        content.title = tw.currentTitle.isEmpty ? "Mosaic" : tw.currentTitle
-        content.body = "Terminal needs attention"
-        content.sound = .default
-        let request = UNNotificationRequest(identifier: UUID().uuidString,
-                                            content: content, trigger: nil)
-        UNUserNotificationCenter.current().add(request)
-    }
-
-    private func handleTerminalNotification(_ tw: TerminalWindowView, title: String, body: String) {
-        let settings = TerminalSettings.shared
-        let isActive = canvasView.activeTerminal === tw
-        if settings.flashOnBell {
-            tw.flashBorder()
-            minimapView.flashTerminal(id: tw.id)
-        }
-        if settings.panOnBell && !isActive {
-            panToTerminal(tw)
-        }
-        guard !NSApp.isActive else { return }
-        let content = UNMutableNotificationContent()
-        content.title = title.isEmpty ? (tw.currentTitle.isEmpty ? "Mosaic" : tw.currentTitle) : title
+        content.title = title ?? (tw.currentTitle.isEmpty ? "Mosaic" : tw.currentTitle)
         content.body = body
         content.sound = .default
         let request = UNNotificationRequest(identifier: UUID().uuidString,
                                             content: content, trigger: nil)
         UNUserNotificationCenter.current().add(request)
-    }
-
-    private func panToTerminal(_ tw: TerminalWindowView) {
-        let worldCenter = CGPoint(x: tw.frame.midX, y: tw.frame.midY)
-        let screenCenter = CGPoint(x: canvasView.bounds.midX, y: canvasView.bounds.midY)
-        var vp = canvasView.viewport
-        vp.panX = screenCenter.x - worldCenter.x * vp.zoom
-        vp.panY = screenCenter.y - worldCenter.y * vp.zoom
-        canvasView.setViewport(vp)
-        canvasView.activateTerminal(tw)
-        tw.focusTerminal()
     }
 }
 

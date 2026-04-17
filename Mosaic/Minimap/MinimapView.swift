@@ -24,7 +24,7 @@ final class MinimapView: FlippedView {
     private var annotationViews: [AnnotationView] = []
     private var currentViewport = Viewport()
     private var focusedWindowID: UUID?
-    private var flashingWindowIDs: Set<UUID> = []
+    private var flashingWindows: [UUID: NSColor] = [:]
 
     // Computed during render; used for click-to-pan
     private var worldExtent = CGRect(x: -200, y: -200, width: 2000, height: 1600)
@@ -51,13 +51,13 @@ final class MinimapView: FlippedView {
 
     /// Flash a terminal's minimap representation briefly.
     /// Bypasses the render throttle so the flash is visible immediately.
-    func flashTerminal(id: UUID) {
-        flashingWindowIDs.insert(id)
+    func flashTerminal(id: UUID, color: NSColor = .systemGreen) {
+        flashingWindows[id] = color
         renderSnapshot()
         needsDisplay = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) { [weak self] in
             guard let self else { return }
-            self.flashingWindowIDs.remove(id)
+            self.flashingWindows.removeValue(forKey: id)
             self.renderSnapshot()
             self.needsDisplay = true
         }
@@ -138,12 +138,12 @@ final class MinimapView: FlippedView {
             annotImages.append((av.frame, img))
         }
         let focusedID = focusedWindowID
-        let flashing = flashingWindowIDs
+        let flashing = flashingWindows
         let windowFrames = windows.map { (
             frame: $0.frame,
             title: $0.currentTitle,
             isActive: $0.id == focusedID,
-            isFlashing: flashing.contains($0.id),
+            flashColor: flashing[$0.id],
             bgColor: $0.theme.terminalBackground,
             fgColor: $0.theme.terminalForeground
         ) }
@@ -188,10 +188,10 @@ final class MinimapView: FlippedView {
                 let dotY = dest.minY + dotD * 0.8
                 NSColor(red: 0.9, green: 0.3, blue: 0.3, alpha: 0.9).setFill()
                 NSBezierPath(ovalIn: NSRect(x: dotX, y: dotY, width: dotD, height: dotD)).fill()
-                // Border — green for flashing, bright for focused, subtle otherwise
-                if wf.isFlashing {
+                // Border — flash color when flashing, bright for focused, subtle otherwise
+                if let flash = wf.flashColor {
                     bodyPath.lineWidth = 2.0
-                    NSColor.systemGreen.setStroke()
+                    flash.setStroke()
                 } else if wf.isActive {
                     bodyPath.lineWidth = 0.5
                     let dark = wf.bgColor.isPerceivedDark
