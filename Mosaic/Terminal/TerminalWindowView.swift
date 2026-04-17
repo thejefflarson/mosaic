@@ -93,18 +93,25 @@ final class InterceptingTerminalView: LocalProcessTerminalView {
         return (title: parts[1], body: parts.count >= 3 ? parts[2] : "")
     }
 
-    /// Parse an OSC 133 payload. We currently only care about `D` (command finished).
-    /// Returns the exit code when the payload starts with `D` (nil if none specified),
-    /// or `nil` for any other 133 marker.
+    /// Parse an OSC 133 FinalTerm shell-integration payload.
+    /// A = prompt start, B = command start, C = command executed, D;<exit> = finished.
     enum OSC133Event: Equatable {
+        case promptStart
+        case commandStart
         case commandFinished(exitCode: Int?)
     }
 
     static func parseOSC133(_ text: String) -> OSC133Event? {
-        guard text.hasPrefix("D") else { return nil }
-        let parts = text.split(separator: ";", maxSplits: 1)
-        let exit = parts.count > 1 ? Int(parts[1]) : nil
-        return .commandFinished(exitCode: exit)
+        guard let first = text.first else { return nil }
+        switch first {
+        case "A": return .promptStart
+        case "B": return .commandStart
+        case "D":
+            let parts = text.split(separator: ";", maxSplits: 1)
+            let exit = parts.count > 1 ? Int(parts[1]) : nil
+            return .commandFinished(exitCode: exit)
+        default: return nil
+        }
     }
 
     override func bell(source: Terminal) {
@@ -161,9 +168,6 @@ final class TerminalWindowView: NSView {
     var onBell: (() -> Void)?
     /// (title, body) from OSC 9 / OSC 777.
     var onNotification: ((String, String) -> Void)?
-    /// Fires when a shell with OSC 133 integration finishes a command.
-    /// `exitCode` is nil when the shell didn't report one (e.g. D without params).
-    var onCommandFinished: ((_ exitCode: Int?) -> Void)?
 
     /// Active theme — applied 0.8 s after process start (after shell init sequences).
     var theme: Theme = .dark
@@ -447,16 +451,14 @@ final class TerminalWindowView: NSView {
             }
         }
 
-        // OSC 133 — FinalTerm shell integration. We only care about D (command
-        // finished); A/B/C mark prompt/command boundaries we don't act on yet.
+        // OSC 133 D — command finished. Only wire this marker; busy indicators
+        // on B/C are a bad idea for TUIs (claude/vim) which never emit D until exit,
+        // leaving the whole app pulsing.
         terminal.parser.oscHandlers[133] = { [weak self] data in
             let text = String(bytes: data, encoding: .utf8) ?? ""
-            guard let event = InterceptingTerminalView.parseOSC133(text) else { return }
-            switch event {
-            case .commandFinished(let exit):
-                Task { @MainActor [weak self] in
-                    self?.onCommandFinished?(exit)
-                }
+            guard case .commandFinished(let exit) = InterceptingTerminalView.parseOSC133(text) else { return }
+            Task { @MainActor [weak self] in
+                self?.titleBar.setStatus(.finished(exitCode: exit))
             }
         }
     }

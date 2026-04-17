@@ -3,6 +3,27 @@ import AppKit
 final class TitleBarView: NSView {
     let titleLabel = NSTextField(labelWithString: "Terminal")
     let closeButton = NSButton()
+    private let statusIndicator = StatusIndicatorView()
+    private var statusFadeTimer: Timer?
+
+    enum Status {
+        case idle
+        case finished(exitCode: Int?)
+    }
+
+    func setStatus(_ status: Status) {
+        statusFadeTimer?.invalidate()
+        statusFadeTimer = nil
+        switch status {
+        case .idle:
+            statusIndicator.state = .idle
+        case .finished(let exit):
+            statusIndicator.state = .finished(success: (exit ?? 0) == 0)
+            statusFadeTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: false) { [weak self] _ in
+                Task { @MainActor [weak self] in self?.statusIndicator.state = .idle }
+            }
+        }
+    }
 
     var onClose: (() -> Void)?
     /// Drag delta in screen points (not world).
@@ -49,6 +70,10 @@ final class TitleBarView: NSView {
         titleLabel.alignment = .center
         addSubview(titleLabel)
 
+        // Status indicator (command busy / exit code), right side opposite close button.
+        statusIndicator.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(statusIndicator)
+
         NSLayoutConstraint.activate([
             closeButton.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
             closeButton.centerYAnchor.constraint(equalTo: centerYAnchor),
@@ -58,6 +83,11 @@ final class TitleBarView: NSView {
             titleLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 32),
             titleLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -32),
             titleLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
+
+            statusIndicator.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
+            statusIndicator.centerYAnchor.constraint(equalTo: centerYAnchor),
+            statusIndicator.widthAnchor.constraint(equalToConstant: 12),
+            statusIndicator.heightAnchor.constraint(equalToConstant: 12),
         ])
     }
 
@@ -156,5 +186,58 @@ final class TitleBarView: NSView {
         lastDragLocation = nil
         if wasDragging { onDragEnded?() }
         wasDragging = false
+    }
+}
+
+/// Small right-side dot that conveys command status:
+/// idle → invisible; busy → rotating dashed ring; finished → solid green or red.
+final class StatusIndicatorView: NSView {
+    enum State: Equatable {
+        case idle
+        case finished(success: Bool)
+    }
+
+    var state: State = .idle {
+        didSet {
+            guard state != oldValue else { return }
+            updateLayers()
+        }
+    }
+
+    private let dotLayer = CAShapeLayer()
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        setup()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        setup()
+    }
+
+    private func setup() {
+        wantsLayer = true
+        layer?.addSublayer(dotLayer)
+        updateLayers()
+    }
+
+    override func layout() {
+        super.layout()
+        let side = min(bounds.width, bounds.height)
+        let rect = CGRect(x: (bounds.width - side) / 2,
+                          y: (bounds.height - side) / 2,
+                          width: side, height: side)
+        dotLayer.path = CGPath(ellipseIn: rect.insetBy(dx: 1, dy: 1), transform: nil)
+    }
+
+    private func updateLayers() {
+        switch state {
+        case .idle:
+            dotLayer.isHidden = true
+        case .finished(let success):
+            dotLayer.isHidden = false
+            dotLayer.fillColor = (success ? NSColor.systemGreen : NSColor.systemRed).cgColor
+        }
     }
 }

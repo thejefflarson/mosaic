@@ -149,9 +149,6 @@ final class CanvasViewController: NSViewController {
         terminalController.onNotification = { [weak self] tw, title, body in
             self?.handleTerminalNotification(tw, title: title, body: body)
         }
-        terminalController.onCommandFinished = { [weak self] tw, exitCode in
-            self?.handleCommandFinished(tw, exitCode: exitCode)
-        }
         annotationController = AnnotationController(
             canvasView: canvasView,
             undoManager: { [weak self] in self?.undoManager },
@@ -863,16 +860,6 @@ final class CanvasViewController: NSViewController {
         notifyAttention(tw, title: title.isEmpty ? nil : title, body: body)
     }
 
-    /// OSC 133 D — the shell reports a command finished. Green flash on success,
-    /// red on failure; no notification banner (this fires on every prompt so it
-    /// would be noisy). More precise than BEL since it fires exactly on the
-    /// command boundary.
-    private func handleCommandFinished(_ tw: TerminalWindowView, exitCode: Int?) {
-        guard TerminalSettings.shared.flashOnBell else { return }
-        let color: NSColor = (exitCode ?? 0) == 0 ? .systemGreen : .systemRed
-        tw.flashBorder(color: color)
-        minimapView.flashTerminal(id: tw.id, color: color)
-    }
 
     private func notifyAttention(_ tw: TerminalWindowView, title: String?, body: String) {
         let settings = TerminalSettings.shared

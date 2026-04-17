@@ -76,10 +76,15 @@ struct TerminalOSCTests {
         #expect(InterceptingTerminalView.parseOSC133("D;abc") == .commandFinished(exitCode: nil))
     }
 
-    @Test func osc133IgnoresOtherMarkers() {
-        #expect(InterceptingTerminalView.parseOSC133("A") == nil)
-        #expect(InterceptingTerminalView.parseOSC133("B") == nil)
+    @Test func osc133PromptAndCommandMarkers() {
+        #expect(InterceptingTerminalView.parseOSC133("A") == .promptStart)
+        #expect(InterceptingTerminalView.parseOSC133("B") == .commandStart)
+    }
+
+    @Test func osc133IgnoresUnknownAndEmpty() {
+        // C (command executed) isn't actionable for us — unparsed.
         #expect(InterceptingTerminalView.parseOSC133("C") == nil)
         #expect(InterceptingTerminalView.parseOSC133("") == nil)
+        #expect(InterceptingTerminalView.parseOSC133("X") == nil)
     }
 }

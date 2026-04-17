@@ -32,8 +32,6 @@ final class TerminalController {
     var onBell: ((TerminalWindowView) -> Void)?
     /// Called on OSC 9/777 notification with (terminal, title, body).
     var onNotification: ((TerminalWindowView, String, String) -> Void)?
-    /// Called on OSC 133 D (shell command finished) with (terminal, exitCode).
-    var onCommandFinished: ((TerminalWindowView, Int?) -> Void)?
 
     // MARK: - State
 
@@ -140,10 +138,6 @@ final class TerminalController {
             onNotification?(tw, title, body)
         }
 
-        tw.onCommandFinished = { [weak self, weak tw] exitCode in
-            guard let self, let tw else { return }
-            onCommandFinished?(tw, exitCode)
-        }
 
         cv.addTerminal(tw)
         cv.activateTerminal(tw)
