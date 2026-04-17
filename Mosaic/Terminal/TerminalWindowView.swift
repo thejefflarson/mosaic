@@ -73,10 +73,12 @@ final class InterceptingTerminalView: LocalProcessTerminalView {
     }
 
     static func trimTrailingSpacesPerLine(_ text: String) -> String {
-        text.split(separator: "\n", omittingEmptySubsequences: false)
-            .map { segment -> String in
-                var s = String(segment)
-                // Preserve \r at end of line (CRLF) — strip it before trimming spaces, restore after.
+        // Operate on UnicodeScalars: in the Character view, "\r\n" is a single
+        // grapheme cluster, so splitting on the Character "\n" misses CRLF lines.
+        text.unicodeScalars
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .map { scalars -> String in
+                var s = String(String.UnicodeScalarView(scalars))
                 let hadCR = s.hasSuffix("\r")
                 if hadCR { s.removeLast() }
                 while s.last == " " { s.removeLast() }
