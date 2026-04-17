@@ -16,14 +16,14 @@ private struct ToolPaletteSwiftUIView: View {
     @ObservedObject var model: ToolPaletteModel
 
     private let tools: [(tool: CanvasTool, symbol: String, tooltip: String)] = [
-        (.pointer,    "cursorarrow",    "Pointer (V)"),
-        (.terminal,   "note.text",      "New Terminal (T)"),
-        (.text,       "textformat",     "Text Label (L)"),
-        (.stickyNote, "text.document",  "Sticky Note (N)"),
-        (.arrow,      "arrow.up.right", "Arrow (A)"),
-        (.pen,        "pencil.tip",     "Pen (P)"),
-        (.image,      "photo",          "Image (I)"),
-        (.delete,     "trash",          "Delete (X)"),
+        (.pointer,    "cursorarrow",    "Pointer"),
+        (.terminal,   "note.text",      "New Terminal"),
+        (.text,       "textformat",     "Text Label"),
+        (.stickyNote, "text.document",  "Sticky Note"),
+        (.arrow,      "arrow.up.right", "Arrow"),
+        (.pen,        "pencil.tip",     "Pen"),
+        (.image,      "photo",          "Image"),
+        (.delete,     "trash",          "Delete"),
     ]
 
     var body: some View {

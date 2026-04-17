@@ -428,6 +428,8 @@ final class CanvasViewController: NSViewController {
                 for tw in terminalController.windows where rect.intersects(tw.frame) { tw.onClose?() }
                 for av in annotationController.annotationsIntersecting(rect) { annotationController.remove(av) }
             }
+            // Delete is a one-shot action — revert to pointer so a second click doesn't keep deleting.
+            setTool(.pointer)
         } else {
             annotationController.toolEnded(tool, at: worldPt)
         }
@@ -621,33 +623,6 @@ final class CanvasViewController: NSViewController {
 
     @objc func toggleSnapping() {
         toolPalette.snappingEnabled.toggle()
-    }
-
-    // MARK: - Tool keyboard shortcuts
-
-    override func keyDown(with event: NSEvent) {
-        // Only handle shortcuts when the canvas itself has focus (not a text field or terminal).
-        guard view.window?.firstResponder === canvasView ||
-              view.window?.firstResponder === view else {
-            super.keyDown(with: event)
-            return
-        }
-        // Don't intercept when a modifier is held — lets Cmd+V, Cmd+C, etc. pass through.
-        guard event.modifierFlags.intersection([.command, .option, .control]).isEmpty else {
-            super.keyDown(with: event)
-            return
-        }
-        switch event.charactersIgnoringModifiers?.lowercased() {
-        case "v": setTool(.pointer)
-        case "t": setTool(.terminal)
-        case "l": setTool(.text)
-        case "n": setTool(.stickyNote)
-        case "a": setTool(.arrow)
-        case "p": setTool(.pen)
-        case "i": setTool(.image)
-        case "x": setTool(.delete)
-        default:  super.keyDown(with: event)
-        }
     }
 
     private func setTool(_ tool: CanvasTool) {

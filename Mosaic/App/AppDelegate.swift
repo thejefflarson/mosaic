@@ -49,9 +49,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         window.titleVisibility = .hidden
         window.contentViewController = vc
         window.isRestorable = true
-        // On first launch, fill the visible screen frame (respects menu bar + Dock).
-        // Subsequent launches restore the user's saved size/position via setFrameAutosaveName.
-        if !window.setFrameAutosaveName("MainWindow") {
+        // Enable frame autosave, then try to restore the saved frame.
+        // On first launch (no saved frame) fall back to the visible screen frame.
+        let autosaveName = NSWindow.FrameAutosaveName("MainWindow")
+        window.setFrameAutosaveName(autosaveName)
+        if !window.setFrameUsingName(autosaveName) {
             if let screen = NSScreen.main {
                 window.setFrame(screen.visibleFrame, display: true)
             } else {
