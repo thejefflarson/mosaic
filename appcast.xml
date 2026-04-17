@@ -84,5 +84,16 @@
                  length="3591165"
                  type="application/octet-stream" />
     </item>
+
+    <item>
+      <title>Mosaic 0.8.0</title>
+      <pubDate>Fri, 17 Apr 2026 05:41:55 +0000</pubDate>
+      <sparkle:version>10</sparkle:version>
+      <sparkle:shortVersionString>0.8.0</sparkle:shortVersionString>
+      <enclosure url="https://github.com/thejefflarson/mosaic/releases/download/v0.8.0/Mosaic-v0.8.0.dmg"
+                 sparkle:edSignature="sRM+373jnPgCYCsjCGchFinz8uHQ4fgt7IazbTr5935YXPL5dFctK3j2EXvQ5DpqStWCDsKx0c/DlxTAgP4dCA=="
+                 length="3626627"
+                 type="application/octet-stream" />
+    </item>
   </channel>
 </rss>
