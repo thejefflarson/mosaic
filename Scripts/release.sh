@@ -30,8 +30,12 @@ trap 'rm -rf "$BUILD_DIR"' EXIT
 
 # ── Prerequisites ─────────────────────────────────────────────────────────────
 
-for cmd in xcodegen xcodebuild xcrun hdiutil gh git; do
-    command -v "$cmd" &>/dev/null || { echo "error: $cmd not found"; exit 1; }
+for cmd in xcodegen xcodebuild xcrun hdiutil create-dmg gh git; do
+    command -v "$cmd" &>/dev/null || {
+        echo "error: $cmd not found"
+        [[ "$cmd" == "create-dmg" ]] && echo "  install with: brew install create-dmg"
+        exit 1
+    }
 done
 
 IDENTITIES=$(security find-identity -v -p codesigning 2>/dev/null)
@@ -160,16 +164,23 @@ xcodebuild -exportArchive \
 # ── DMG ───────────────────────────────────────────────────────────────────────
 
 echo "→ creating DMG"
-DMG_STAGING="$BUILD_DIR/dmg-staging"
-mkdir -p "$DMG_STAGING"
-cp -R "$EXPORT_DIR/$APP_NAME.app" "$DMG_STAGING/"
-ln -s /Applications "$DMG_STAGING/Applications"
-hdiutil create \
-    -volname "$APP_NAME" \
-    -srcfolder "$DMG_STAGING" \
-    -ov -format UDZO \
-    "$DMG" \
-    > /dev/null
+# create-dmg generates a polished DMG with correctly-iconed Applications alias
+# and positioned icons. It writes to the current directory, so cd into BUILD_DIR.
+(
+    cd "$BUILD_DIR"
+    create-dmg \
+        --volname "$APP_NAME" \
+        --window-pos 200 120 \
+        --window-size 600 340 \
+        --icon-size 100 \
+        --icon "$APP_NAME.app" 150 160 \
+        --hide-extension "$APP_NAME.app" \
+        --app-drop-link 450 160 \
+        --no-internet-enable \
+        "$(basename "$DMG")" \
+        "$EXPORT_DIR/$APP_NAME.app" \
+        > /dev/null
+)
 
 # ── Notarize & staple ─────────────────────────────────────────────────────────
 
