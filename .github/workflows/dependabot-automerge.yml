@@ -9,7 +9,19 @@ jobs:
     runs-on: ubuntu-latest
     if: github.actor == 'dependabot[bot]'
     steps:
-      - name: Enable auto-merge
+      # Read Dependabot's metadata so we can gate on update-type / ecosystem.
+      - name: Fetch metadata
+        id: meta
+        uses: dependabot/fetch-metadata@v2
+
+      # Only patch / security updates auto-merge. SwiftPM updates always require
+      # human review — they affect the update channel itself (Sparkle), and a
+      # poisoned indirect dep that auto-merges to main would ship to all users
+      # at the next release.
+      - name: Enable auto-merge for safe updates
+        if: |
+          steps.meta.outputs.update-type == 'version-update:semver-patch' &&
+          steps.meta.outputs.package-ecosystem != 'swift'
         run: gh pr merge --auto --merge "$PR_URL"
         env:
           PR_URL: ${{github.event.pull_request.html_url}}

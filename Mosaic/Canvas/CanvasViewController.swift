@@ -791,8 +791,7 @@ final class CanvasViewController: NSViewController {
     // MARK: - Window menu actions
 
     @objc func clearActiveTerminalScrollback() { canvasView.activeTerminal?.clearScrollback() }
-    @objc func performFindPanelAction(_ sender: Any?) { canvasView.activeTerminal?.performFind(sender) }
-    @objc func closeActiveTerminal() { terminalController.closeActive() }
+    @objc func closeActiveTerminal(_ sender: Any?) { terminalController.closeActive() }
     @objc func focusTerminalLeft()   { terminalController.focusNearest(.left)  }
     @objc func focusTerminalRight()  { terminalController.focusNearest(.right) }
     @objc func focusTerminalUp()     { terminalController.focusNearest(.up)    }
@@ -848,6 +847,7 @@ final class CanvasViewController: NSViewController {
             terminalController.snapViewportToTerminal(tw)
         }
         guard !appActive else { return }
+        AppDelegate.requestNotificationAuthorizationIfNeeded()
         let content = UNMutableNotificationContent()
         content.title = title ?? (tw.currentTitle.isEmpty ? "Mosaic" : tw.currentTitle)
         content.body = body
@@ -908,6 +908,9 @@ extension CanvasViewController: NSMenuItemValidation {
         }
         if menuItem.action == #selector(toggleFPSOverlay) {
             menuItem.state = fpsLabel.isHidden ? .off : .on
+        }
+        if menuItem.action == #selector(closeActiveTerminal(_:)) {
+            return canvasView.activeTerminal != nil
         }
         return true
     }

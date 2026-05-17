@@ -87,4 +87,76 @@ struct TerminalOSCTests {
         #expect(InterceptingTerminalView.parseOSC133("") == nil)
         #expect(InterceptingTerminalView.parseOSC133("X") == nil)
     }
+
+    // MARK: - sanitizeNotificationText
+    //
+    // OSC 777 payloads come from terminal output; before reaching
+    // UNUserNotificationCenter they're clamped and stripped of control bytes.
+
+    @Test func sanitizeClampsToMaxLength() {
+        let long = String(repeating: "x", count: 1000)
+        #expect(InterceptingTerminalView.sanitizeNotificationText(long, max: 16).count == 16)
+    }
+
+    @Test func sanitizeStripsC0Controls() {
+        // Bell, backspace, form feed — all stripped. Newline is preserved.
+        let s = "hi\u{07}\u{08}\u{0C}\nworld"
+        #expect(InterceptingTerminalView.sanitizeNotificationText(s, max: 100) == "hi\nworld")
+    }
+
+    @Test func sanitizeStripsC1Controls() {
+        // 8-bit C1 introducers (0x80..0x9F) all removed.
+        let s = "before\u{9B}31mafter\u{9D}link\u{07}"
+        let cleaned = InterceptingTerminalView.sanitizeNotificationText(s, max: 100)
+        for v: UInt32 in 0x80...0x9F {
+            #expect(!cleaned.unicodeScalars.contains(Unicode.Scalar(v)!),
+                    "C1 byte U+\(String(v, radix: 16)) leaked through")
+        }
+    }
+
+    @Test func sanitizeKeepsPrintableUnicode() {
+        let s = "Build ✓ — passed (≈3s)"
+        #expect(InterceptingTerminalView.sanitizeNotificationText(s, max: 100) == s)
+    }
+
+    // MARK: - stripEscapeSequences (broader coverage)
+    //
+    // The existing LinkResolutionTests cover C1 introducers; below covers the
+    // 7-bit ESC paths and mixed payloads.
+
+    @Test func stripsCSI() {
+        #expect(TerminalWindowView.stripEscapeSequences("a\u{1B}[31mb\u{1B}[0mc") == "abc")
+    }
+
+    @Test func stripsOSCBEL() {
+        // OSC 8 hyperlink terminated by BEL.
+        let s = "before\u{1B}]8;;https://x\u{07}label\u{1B}]8;;\u{07}after"
+        #expect(TerminalWindowView.stripEscapeSequences(s) == "beforelabelafter")
+    }
+
+    @Test func stripsOSCST() {
+        // OSC terminated by ST (ESC \).
+        let s = "before\u{1B}]0;title\u{1B}\\after"
+        #expect(TerminalWindowView.stripEscapeSequences(s) == "beforeafter")
+    }
+
+    @Test func stripsDCSAndPM() {
+        let dcs = "a\u{1B}Pdata\u{1B}\\b"
+        let pm  = "c\u{1B}^secret\u{1B}\\d"
+        let apc = "e\u{1B}_app\u{1B}\\f"
+        #expect(TerminalWindowView.stripEscapeSequences(dcs) == "ab")
+        #expect(TerminalWindowView.stripEscapeSequences(pm)  == "cd")
+        #expect(TerminalWindowView.stripEscapeSequences(apc) == "ef")
+    }
+
+    @Test func stripsTwoByteEsc() {
+        // Plain ESC X (e.g. ESC =, ESC >, ESC c) — drop both bytes.
+        #expect(TerminalWindowView.stripEscapeSequences("a\u{1B}=b") == "ab")
+        #expect(TerminalWindowView.stripEscapeSequences("a\u{1B}>b") == "ab")
+    }
+
+    @Test func preservesPlainText() {
+        let s = "no escapes here — just text 🚀"
+        #expect(TerminalWindowView.stripEscapeSequences(s) == s)
+    }
 }

@@ -10,9 +10,10 @@ import Foundation
 struct WorkspaceStoreTests {
 
     private let store: WorkspaceStore
+    private let tmp: URL
 
     init() {
-        let tmp = FileManager.default.temporaryDirectory
+        tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("MosaicTests-\(UUID().uuidString)", isDirectory: true)
         store = WorkspaceStore(directory: tmp)
     }
@@ -112,5 +113,51 @@ struct WorkspaceStoreTests {
         #expect(vp?.panX == -123.5)
         #expect(vp?.panY == 77.25)
         #expect(vp?.zoom == 2.0)
+    }
+
+    // MARK: - Failure paths
+
+    private var snapshotPath: URL { tmp.appendingPathComponent("workspace.json") }
+
+    @Test func saveSetsRestrictivePermissions() throws {
+        store.save(makeSnapshot())
+        store.flushSynchronously()
+        let attrs = try FileManager.default.attributesOfItem(atPath: snapshotPath.path)
+        let perms = (attrs[.posixPermissions] as? NSNumber)?.intValue ?? 0
+        #expect(perms == 0o600,
+                "saved workspace.json should be 0600, got \(String(perms, radix: 8))")
+    }
+
+    @Test func loadReturnsNilWhenFileMissing() {
+        // Fresh store directory; no save → load is nil, no crash.
+        #expect(store.load() == nil)
+    }
+
+    @Test func oversizeFileIsBackedUpAndLoadReturnsNil() throws {
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        // 65 MiB exceeds the 64 MiB cap.
+        let big = Data(repeating: 0x7B, count: 65 * 1024 * 1024)
+        try big.write(to: snapshotPath)
+
+        #expect(store.load() == nil)
+
+        let entries = try FileManager.default.contentsOfDirectory(atPath: tmp.path)
+        let backups = entries.filter { $0.hasPrefix("workspace.json.corrupt-") && $0.contains("size>") }
+        #expect(backups.count == 1, "expected one size> backup, found \(backups)")
+        #expect(!FileManager.default.fileExists(atPath: snapshotPath.path),
+                "original should be moved aside")
+    }
+
+    @Test func corruptJSONIsBackedUpAndLoadReturnsNil() throws {
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        try "this is not json".data(using: .utf8)!.write(to: snapshotPath)
+
+        #expect(store.load() == nil)
+
+        let entries = try FileManager.default.contentsOfDirectory(atPath: tmp.path)
+        let backups = entries.filter {
+            $0.hasPrefix("workspace.json.corrupt-") && $0.hasSuffix("-decode")
+        }
+        #expect(backups.count == 1, "expected one decode backup, found \(backups)")
     }
 }

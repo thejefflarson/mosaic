@@ -28,6 +28,12 @@ final class WorkspaceStore: Sendable {
             do {
                 let data = try JSONEncoder().encode(snapshot)
                 try data.write(to: url, options: .atomic)
+                // Scrollback may include secrets the user pasted/typed (.env, tokens,
+                // SSH passphrases). 0600 keeps the file off backups-as-other-users
+                // and out of reach of unsandboxed peer processes harvesting Application
+                // Support. Same treatment is applied to stalls.log on first write.
+                try? FileManager.default.setAttributes([.posixPermissions: 0o600],
+                                                       ofItemAtPath: url.path)
             } catch {
                 print("[WorkspaceStore] save failed: \(error)")
             }
@@ -36,15 +42,41 @@ final class WorkspaceStore: Sendable {
 
     /// Block until any in-flight async save completes. Call from `applicationWillTerminate`.
     func flushSynchronously() {
+        dispatchPrecondition(condition: .notOnQueue(queue))
         queue.sync { }
     }
+
+    /// Refuse to decode a workspace.json larger than this. The file is read on the
+    /// main thread at launch, and a tampered/corrupt multi-MB JSON would beachball.
+    private static let maxSnapshotBytes = 64 * 1024 * 1024
 
     /// Load the saved snapshot synchronously.
     ///
     /// This is intentionally synchronous — it only runs once at app launch, before
     /// any concurrent work begins, so there is no queue contention risk.
     func load() -> WorkspaceSnapshot? {
+        let path = storeURL.path
+        var st = stat()
+        guard lstat(path, &st) == 0 else { return nil }
+        guard st.st_size <= Self.maxSnapshotBytes else {
+            backupBadSnapshot(reason: "size>\(Self.maxSnapshotBytes)")
+            return nil
+        }
         guard let data = try? Data(contentsOf: storeURL) else { return nil }
-        return try? JSONDecoder().decode(WorkspaceSnapshot.self, from: data)
+        do {
+            return try JSONDecoder().decode(WorkspaceSnapshot.self, from: data)
+        } catch {
+            NSLog("[WorkspaceStore] decode failed: %@ — backing up corrupt file", "\(error)")
+            backupBadSnapshot(reason: "decode")
+            return nil
+        }
+    }
+
+    private func backupBadSnapshot(reason: String) {
+        let f = DateFormatter()
+        f.dateFormat = "yyyyMMdd-HHmmss"
+        let suffix = ".corrupt-\(f.string(from: Date()))-\(reason)"
+        let dest = storeURL.path + suffix
+        try? FileManager.default.moveItem(atPath: storeURL.path, toPath: dest)
     }
 }

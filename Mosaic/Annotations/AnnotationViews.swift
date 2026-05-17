@@ -612,9 +612,18 @@ final class ImageAnnotationView: AnnotationView {
     /// Preferred initializer when the source is a file URL — copies the original
     /// file verbatim so SVG, HEIC, WebP, etc. are preserved without re-encoding.
     /// Returns nil if the URL cannot be decoded as an image.
+    /// Refuse to copy/decode images above this size — prevents accidental
+    /// disk-fill when a user drops a multi-GB file and avoids ImageIO
+    /// re-decoding huge buffers on every scroll frame.
+    static let maxImageBytes: Int = 50 * 1024 * 1024
+    static let maxImageDimension: CGFloat = 8000
+
     init?(at worldPt: CGPoint, url: URL) {
+        let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
+        if let size = attrs?[.size] as? NSNumber, size.intValue > Self.maxImageBytes { return nil }
         guard let image = NSImage(contentsOf: url), image.isValid else { return nil }
         let s = image.size
+        guard s.width <= Self.maxImageDimension, s.height <= Self.maxImageDimension else { return nil }
         let ar = (s.width > 0 && s.height > 0) ? s.width / s.height : 1
         let scale = min(1, min(400 / max(1, s.width), 300 / max(1, s.height)))
         let size = CGSize(width: s.width * scale, height: s.height * scale)

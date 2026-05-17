@@ -5,7 +5,41 @@ import AppKit
 @MainActor
 final class TerminalController {
 
-    static let defaultShell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
+    static var defaultShell: String { ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh" }
+
+    /// Cap on terminals restored from a snapshot. A tampered or corrupt
+    /// workspace.json with thousands of WindowSnapshot entries would otherwise
+    /// fork-bomb the app at launch.
+    static let maxRestoredWindows = 64
+
+    /// Map a requested shell path to the executable we'll actually spawn. Returns
+    /// the canonicalised path if it appears in `allowedShells`; otherwise falls
+    /// back to `defaultShell`. Pulled out as a static function so we can
+    /// unit-test the allowlist without driving the spawn path.
+    static func resolveShell(_ requested: String) -> String {
+        let canonical = URL(fileURLWithPath: requested).resolvingSymlinksInPath().standardizedFileURL.path
+        return allowedShells.contains(canonical) ? canonical : defaultShell
+    }
+
+    /// Shell paths allowed when restoring from a snapshot. Built from /etc/shells
+    /// plus the current $SHELL and the built-in default; cached at first read.
+    static let allowedShells: Set<String> = {
+        var set: Set<String> = []
+        if let data = try? String(contentsOfFile: "/etc/shells", encoding: .utf8) {
+            for raw in data.split(separator: "\n") {
+                let line = raw.trimmingCharacters(in: .whitespaces)
+                if !line.isEmpty && !line.hasPrefix("#") {
+                    set.insert(
+                        URL(fileURLWithPath: line).resolvingSymlinksInPath().standardizedFileURL.path)
+                }
+            }
+        }
+        if let sh = ProcessInfo.processInfo.environment["SHELL"] {
+            set.insert(URL(fileURLWithPath: sh).resolvingSymlinksInPath().standardizedFileURL.path)
+        }
+        set.insert("/bin/zsh"); set.insert("/bin/bash"); set.insert("/bin/sh")
+        return set
+    }()
 
     // MARK: - Injected dependencies
 
@@ -77,13 +111,23 @@ final class TerminalController {
                         scrollback: String? = nil) {
         guard let cv = canvasView else { return }
 
-        // Validate that the shell path is an executable file before spawning.
-        // Guards against a tampered workspace.json specifying an arbitrary path.
-        let resolvedShell = FileManager.default.isExecutableFile(atPath: shell)
-            ? shell
-            : TerminalController.defaultShell
+        // Restrict shell paths to an allowlist derived from /etc/shells (+ $SHELL +
+        // built-in defaults). isExecutableFile alone accepted any +x file on disk,
+        // so a tampered workspace.json specifying /tmp/payload would have spawned
+        // attacker code on every launch.
+        let resolvedShell = Self.resolveShell(shell)
 
-        let tw = manager.spawn(frame: frame, shell: resolvedShell, cwd: cwd)
+        // Reject cwds containing NUL (would truncate at the syscall boundary) and
+        // those that don't exist as directories.
+        let resolvedCwd: String? = {
+            guard let c = cwd, !c.contains("\0") else { return nil }
+            var isDir: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: c, isDirectory: &isDir),
+                  isDir.boolValue else { return nil }
+            return c
+        }()
+
+        let tw = manager.spawn(frame: frame, shell: resolvedShell, cwd: resolvedCwd)
         tw.restoredScrollback = scrollback
         tw.canvasView = cv
         tw.theme = theme()
@@ -237,6 +281,9 @@ final class TerminalController {
 
     private func broadcastKey(_ data: Data, excluding source: TerminalWindowView) {
         guard broadcastMode else { return }
+        // Cap per-broadcast payload — a pasted megabyte or runaway script in the
+        // source terminal would otherwise fan out to every peer at once.
+        guard data.count <= 64 * 1024 else { return }
         manager.windows.filter { $0 !== source && $0.shellReady }.forEach { $0.sendInput(data) }
     }
 
@@ -307,7 +354,11 @@ final class TerminalController {
     }
 
     func restore(_ snapshots: [WorkspaceSnapshot.WindowSnapshot]) {
-        for w in snapshots {
+        if snapshots.count > Self.maxRestoredWindows {
+            NSLog("[TerminalController] snapshot has %d windows; capping at %d",
+                  snapshots.count, Self.maxRestoredWindows)
+        }
+        for w in snapshots.prefix(Self.maxRestoredWindows) {
             spawnWithFrame(
                 CGRect(x: w.x, y: w.y, width: w.width, height: w.height),
                 cwd: w.cwd,

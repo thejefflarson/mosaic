@@ -69,7 +69,31 @@ final class InterceptingTerminalView: LocalProcessTerminalView {
         }
         let pb = NSPasteboard.general
         pb.clearContents()
-        pb.setString(Self.trimTrailingSpacesPerLine(raw), forType: .string)
+        pb.setString(Self.sanitizeForClipboard(Self.trimTrailingSpacesPerLine(raw)),
+                     forType: .string)
+    }
+
+    /// Strip Unicode characters that allow malicious PTY output to display one thing
+    /// and paste another: bidi overrides (U+202A–U+202E, U+2066–U+2069), zero-width
+    /// chars (U+200B–U+200D, U+2060, U+FEFF), and the line/paragraph separators
+    /// (U+2028/U+2029) that some shells treat as newlines. Defends against the
+    /// "innocuous-looking command pastes as `rm -rf …`" class of attack
+    /// (cf. iTerm2 2017, CVE-2017-2671).
+    static func sanitizeForClipboard(_ text: String) -> String {
+        var out = String.UnicodeScalarView()
+        out.reserveCapacity(text.unicodeScalars.count)
+        for s in text.unicodeScalars {
+            switch s.value {
+            case 0x202A...0x202E, 0x2066...0x2069,            // bidi overrides / isolates
+                 0x200B...0x200D, 0x2060, 0xFEFF:             // zero-width
+                continue
+            case 0x2028, 0x2029:                              // line/paragraph separator
+                out.append("\n")
+            default:
+                out.append(s)
+            }
+        }
+        return String(out)
     }
 
     static func trimTrailingSpacesPerLine(_ text: String) -> String {
@@ -86,6 +110,22 @@ final class InterceptingTerminalView: LocalProcessTerminalView {
                 return s
             }
             .joined(separator: "\n")
+    }
+
+    /// Clamp and strip control bytes from a notification field before forwarding to
+    /// UNUserNotificationCenter — the payload comes from terminal output.
+    static func sanitizeNotificationText(_ s: String, max: Int) -> String {
+        var out = String.UnicodeScalarView()
+        out.reserveCapacity(min(s.unicodeScalars.count, max))
+        var count = 0
+        for scalar in s.unicodeScalars where count < max {
+            let v = scalar.value
+            if v < 0x20 && v != 0x0A { continue }              // strip C0 except newline
+            if v >= 0x80 && v <= 0x9F { continue }             // strip 8-bit C1
+            out.append(scalar)
+            count += 1
+        }
+        return String(out)
     }
 
     /// Parse an OSC 777 payload (minus the "777;" prefix) into (title, body).
@@ -122,6 +162,96 @@ final class InterceptingTerminalView: LocalProcessTerminalView {
         super.bell(source: source)
         Task { @MainActor [weak self] in
             self?.onBell?()
+        }
+    }
+
+    /// Open a link resolved from an OSC 8 payload or from implicit link detection.
+    /// SwiftTerm's default only handles URLs with a scheme — plain file paths like
+    /// `Mosaic/App/AppDelegate.swift` or `src/foo.rs:42:10` fall through and error
+    /// out. We resolve them against the terminal's cwd and open the file.
+    public func requestOpenLink(source _: TerminalView, link: String, params _: [String: String]) {
+        let url = Self.resolveOpenableURL(
+            for: link,
+            cwd: enclosingTerminalWindowView?.currentCwd ?? FileManager.default.homeDirectoryForCurrentUser.path)
+        if let url { NSWorkspace.shared.open(url) }
+    }
+
+    /// Schemes that are categorically dangerous from untrusted terminal output
+    /// and we refuse to hand to NSWorkspace. Everything else is allowed —
+    /// users legitimately click `vscode://`, `slack://`, `zoom://`, custom
+    /// editor schemes, etc. and we don't want to break that workflow.
+    /// `file://` is handled separately (path-containment check below).
+    static let deniedLinkSchemes: Set<String> = ["javascript", "data", "vbscript"]
+
+    /// Pure function so we can unit-test without an NSWorkspace side effect.
+    static func resolveOpenableURL(for link: String, cwd: String) -> URL? {
+        // Reject pathologically long inputs before any regex / canonicalisation
+        // work — both inputs are PTY-controlled and unbounded.
+        guard link.utf8.count <= 4096, cwd.utf8.count <= 4096 else { return nil }
+        let trimmed = link.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        // Classify as URL vs. filesystem path. URL(string:) parses "hello.txt:42"
+        // as scheme="hello.txt" because the scheme grammar allows dots; gate on
+        // an explicit "://" so compiler-output paths aren't mis-classified.
+        // Opaque schemes like `mailto:` are accepted in the second branch.
+        var pathBody = trimmed
+        if trimmed.contains("://"), let url = URL(string: trimmed),
+           let scheme = url.scheme?.lowercased() {
+            if scheme == "file" {
+                // Unwrap to the underlying path and fall through so the same
+                // canonicalise + containment check applies.
+                pathBody = url.path
+            } else if deniedLinkSchemes.contains(scheme) {
+                return nil
+            } else {
+                return url
+            }
+        } else if let colon = trimmed.firstIndex(of: ":"),
+                  let url = URL(string: trimmed),
+                  let scheme = url.scheme?.lowercased(),
+                  // Avoid mis-classifying "hello.txt:42" — scheme must look like
+                  // a real scheme (letters only, no dots) for the opaque branch.
+                  trimmed[..<colon].allSatisfy({ $0.isLetter }),
+                  !deniedLinkSchemes.contains(scheme) {
+            return url
+        }
+
+        // Strip trailing `:line` or `:line:col` suffix (compiler output).
+        let path = pathBody.replacingOccurrences(
+            of: #":[0-9]+(?::[0-9]+)?$"#,
+            with: "",
+            options: .regularExpression)
+
+        // Expand ~ and resolve against cwd for relative paths.
+        let expanded = (path as NSString).expandingTildeInPath
+        let joined = expanded.hasPrefix("/")
+            ? expanded
+            : (cwd as NSString).appendingPathComponent(expanded)
+
+        // Canonicalise to fold out `..` segments and symlinks before exists-check.
+        let resolved = URL(fileURLWithPath: joined)
+            .resolvingSymlinksInPath().standardizedFileURL.path
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: resolved, isDirectory: &isDir) else { return nil }
+        return URL(fileURLWithPath: resolved, isDirectory: isDir.boolValue)
+    }
+
+    /// Route find-panel actions to our custom find bar. SwiftTerm's bundled find UI
+    /// (added with the GPU backend) hangs the main thread when shown inside our world-
+    /// space terminal layout, so we don't call super.
+    override func performFindPanelAction(_ sender: Any?) {
+        guard let item = sender as? NSMenuItem,
+              let host = enclosingTerminalWindowView else { return }
+        switch item.tag {
+        case Int(NSFindPanelAction.showFindPanel.rawValue):
+            host.showFindBar()
+        case Int(NSFindPanelAction.next.rawValue):
+            host.findNext()
+        case Int(NSFindPanelAction.previous.rawValue):
+            host.findPrevious()
+        default:
+            break
         }
     }
 
@@ -183,6 +313,7 @@ final class TerminalWindowView: NSView {
     // forkpty() off the main thread. SwiftTerm dispatches all post-fork UI callbacks
     // back to the main thread internally.
     private nonisolated(unsafe) var termView: InterceptingTerminalView!
+    private var findBar: TerminalFindBar?
     private var frameBeforeDrag: CGRect = .zero
     // Shared event monitors — installed once, dispatch to the active terminal.
     private static var sharedMonitorsInstalled = false
@@ -260,7 +391,11 @@ final class TerminalWindowView: NSView {
         // mouseMoved; we dispatch async so our cursor set runs AFTER SwiftTerm's.
         NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved, .flagsChanged]) { event in
             guard let (_, tv) = activeTerminalWindow(for: event) else {
-                sharedLinkCursorActive = false
+                if sharedLinkCursorActive {
+                    sharedLinkCursorActive = false
+                    DispatchQueue.main.async { NSCursor.iBeam.set() }
+                }
+                lastLinkHitKey = nil
                 lastLinkHit = nil
                 return event
             }
@@ -273,16 +408,19 @@ final class TerminalWindowView: NSView {
                 return event
             }
             let local = tv.convert(windowPoint, from: nil)
+            let tvKey = ObjectIdentifier(tv)
             guard let cell = cellAt(local: local, termView: tv) else {
                 if sharedLinkCursorActive {
                     sharedLinkCursorActive = false
                     DispatchQueue.main.async { NSCursor.iBeam.set() }
                 }
+                lastLinkHitKey = nil
                 lastLinkHit = nil
                 return event
             }
-            // Skip the link lookup if the cursor hasn't moved to a different cell.
-            if let last = lastLinkHit, last == cell { return event }
+            // Skip the link lookup only when the cell AND the terminal still match.
+            if lastLinkHitKey == tvKey, let last = lastLinkHit, last == cell { return event }
+            lastLinkHitKey = tvKey
             lastLinkHit = cell
             let overLink = tv.getTerminal().link(
                 at: .screen(Position(col: cell.col, row: cell.row)),
@@ -314,6 +452,9 @@ final class TerminalWindowView: NSView {
     }
 
     private static var sharedLinkCursorActive = false
+    /// Per-terminal so a cached cell index from a previously-focused terminal
+    /// (with different grid dims) can't early-return for an unrelated cell.
+    private static var lastLinkHitKey: ObjectIdentifier?
     private static var lastLinkHit: (col: Int, row: Int)?
 
     // MARK: - Focus state
@@ -431,6 +572,7 @@ final class TerminalWindowView: NSView {
 
         registerOSCHandlers()
         Self.installSharedMonitors()
+        startRedrawWatchdog()
 
         startProcess()
     }
@@ -446,12 +588,17 @@ final class TerminalWindowView: NSView {
 
         // OSC 777 — notify;title;body
         // SwiftTerm parses this but the delegate is a protocol extension no-op.
-        // Override via parser handler.
+        // Override via parser handler. Cap payload size and sanitize control bytes
+        // (terminal output is untrusted; an unbounded OSC payload would allocate
+        // a huge String on MainActor and forward it to UNUserNotificationCenter).
         terminal.parser.oscHandlers[777] = { [weak self] data in
+            guard data.count <= 8192 else { return }
             let text = String(bytes: data, encoding: .utf8) ?? ""
             guard let parsed = InterceptingTerminalView.parseOSC777(text) else { return }
+            let title = InterceptingTerminalView.sanitizeNotificationText(parsed.title, max: 128)
+            let body  = InterceptingTerminalView.sanitizeNotificationText(parsed.body,  max: 512)
             Task { @MainActor [weak self] in
-                self?.onNotification?(parsed.title, parsed.body)
+                self?.onNotification?(title, body)
             }
         }
 
@@ -459,6 +606,7 @@ final class TerminalWindowView: NSView {
         // on B/C are a bad idea for TUIs (claude/vim) which never emit D until exit,
         // leaving the whole app pulsing.
         terminal.parser.oscHandlers[133] = { [weak self] data in
+            guard data.count <= 8192 else { return }
             let text = String(bytes: data, encoding: .utf8) ?? ""
             guard case .commandFinished(let exit) = InterceptingTerminalView.parseOSC133(text) else { return }
             Task { @MainActor [weak self] in
@@ -467,41 +615,203 @@ final class TerminalWindowView: NSView {
         }
     }
 
+    /// Bound restored scrollback so a single pathological line (e.g.
+    /// `cat /dev/urandom | base64 -w0`) can't bloat workspace.json or stall the
+    /// next launch when re-fed to the terminal.
+    static let maxScrollbackLineChars = 4096
+    static let maxScrollbackTotalChars = 256 * 1024
+
     /// Extract up to `maxLines` of scrollback + visible screen content as plain text.
     func extractScrollbackText(maxLines: Int = 300) -> String {
-        let t = termView.terminal!
+        guard let t = termView.terminal else { return "" }
+        let cap = Self.maxScrollbackLineChars
+        let render: (Int) -> String? = { row in
+            guard let line = t.getScrollInvariantLine(row: row) else { return nil }
+            let s = line.translateToString(trimRight: true,
+                                           characterProvider: { let c = $0.getCharacter(); return c == "\0" ? " " : c })
+            return s.count > cap ? String(s.prefix(cap)) : s
+        }
+
         var lines: [String] = []
 
         // Walk backwards through scrollback (negative row indices into getScrollInvariantLine)
         var row = -1
-        while lines.count < maxLines {
-            guard let line = t.getScrollInvariantLine(row: row) else { break }
-            lines.insert(line.translateToString(trimRight: true, characterProvider: { let c = $0.getCharacter(); return c == "\0" ? " " : c }), at: 0)
+        while lines.count < maxLines, let s = render(row) {
+            lines.insert(s, at: 0)
             row -= 1
         }
 
         // Visible screen lines
         for r in 0..<t.rows {
-            if let line = t.getScrollInvariantLine(row: r) {
-                lines.append(line.translateToString(trimRight: true, characterProvider: { let c = $0.getCharacter(); return c == "\0" ? " " : c }))
-            }
+            if let s = render(r) { lines.append(s) }
         }
 
         // Drop trailing blank lines
         while lines.last?.isEmpty == true { lines.removeLast() }
-        return lines.joined(separator: "\r\n")
+        let joined = lines.joined(separator: "\r\n")
+        return joined.count > Self.maxScrollbackTotalChars
+            ? String(joined.suffix(Self.maxScrollbackTotalChars))
+            : joined
     }
 
-    /// Forward a find-panel action to the SwiftTerm terminal view.
-    /// Pass a nil sender to default to "show find panel".
-    func performFind(_ sender: Any?) {
-        if let item = sender as? NSMenuItem {
-            termView.performFindPanelAction(item)
-        } else {
-            let item = NSMenuItem(title: "", action: nil, keyEquivalent: "")
-            item.tag = Int(NSFindPanelAction.showFindPanel.rawValue)
-            termView.performFindPanelAction(item)
+    // MARK: - Find
+
+    private var matchTotal: Int = 0
+    private var matchIndex: Int = 0  // 1-based; 0 means no current match
+
+    func showFindBar() {
+        let bar = ensureFindBar()
+        if bar.searchText.isEmpty,
+           let selected = termView.getSelection(),
+           !selected.isEmpty,
+           !selected.contains("\n") {
+            bar.searchText = selected
+            recomputeMatchTotal(term: selected)
+            if matchTotal > 0 {
+                matchIndex = 1
+                _ = termView.findNext(selected)
+            }
         }
+        bar.setMatchInfo(current: matchIndex, total: matchTotal)
+        bar.isHidden = false
+        bar.focus()
+    }
+
+    func hideFindBar() {
+        findBar?.isHidden = true
+        termView.clearSearch()
+        matchTotal = 0
+        matchIndex = 0
+        window?.makeFirstResponder(termView)
+    }
+
+    func findNext() {
+        guard let bar = findBar, !bar.searchText.isEmpty else {
+            showFindBar()
+            return
+        }
+        // Recompute on every action — scrollback grows under streaming output, and
+        // our counter would otherwise drift away from SwiftTerm's internal cursor.
+        recomputeMatchTotal(term: bar.searchText)
+        guard matchTotal > 0 else {
+            matchIndex = 0
+            bar.setMatchInfo(current: 0, total: 0)
+            return
+        }
+        matchIndex = matchIndex >= matchTotal ? 1 : matchIndex + 1
+        _ = termView.findNext(bar.searchText)
+        bar.setMatchInfo(current: matchIndex, total: matchTotal)
+    }
+
+    func findPrevious() {
+        guard let bar = findBar, !bar.searchText.isEmpty else {
+            showFindBar()
+            return
+        }
+        recomputeMatchTotal(term: bar.searchText)
+        guard matchTotal > 0 else {
+            matchIndex = 0
+            bar.setMatchInfo(current: 0, total: 0)
+            return
+        }
+        matchIndex = matchIndex <= 1 ? matchTotal : matchIndex - 1
+        _ = termView.findPrevious(bar.searchText)
+        bar.setMatchInfo(current: matchIndex, total: matchTotal)
+    }
+
+    private func ensureFindBar() -> TerminalFindBar {
+        if let bar = findBar { return bar }
+        let bar = TerminalFindBar()
+        bar.translatesAutoresizingMaskIntoConstraints = false
+        bar.isHidden = true
+        bar.onSearchChanged = { [weak self] term in
+            guard let self else { return }
+            if term.isEmpty {
+                self.termView.clearSearch()
+                self.matchTotal = 0
+                self.matchIndex = 0
+            } else {
+                self.recomputeMatchTotal(term: term)
+                if self.matchTotal > 0 {
+                    self.matchIndex = 1
+                    _ = self.termView.findNext(term)
+                } else {
+                    self.matchIndex = 0
+                    self.termView.clearSearch()
+                }
+            }
+            self.findBar?.setMatchInfo(current: self.matchIndex, total: self.matchTotal)
+        }
+        bar.onFindNext = { [weak self] in self?.findNext() }
+        bar.onFindPrevious = { [weak self] in self?.findPrevious() }
+        bar.onClose = { [weak self] in self?.hideFindBar() }
+        addSubview(bar)
+        NSLayoutConstraint.activate([
+            bar.topAnchor.constraint(equalTo: topAnchor, constant: titleBarHeight + 4),
+            bar.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
+            bar.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 6),
+            bar.widthAnchor.constraint(lessThanOrEqualToConstant: 420)
+        ])
+        findBar = bar
+        return bar
+    }
+
+    /// Count case-insensitive substring occurrences across the entire scrollback +
+    /// visible buffer. SwiftTerm's full-buffer match count is internal, so we walk
+    /// rows via the public getScrollInvariantLine and tally matches per line.
+    private func recomputeMatchTotal(term: String) {
+        guard !term.isEmpty, let terminal = termView.terminal else {
+            matchTotal = 0
+            return
+        }
+        // getScrollInvariantLine's valid row range is contiguous starting at
+        // some non-negative `linesTop`. Find it with a doubling probe + binary
+        // search, then walk forward until the function returns nil again.
+        let firstRow: Int
+        if terminal.getScrollInvariantLine(row: 0) != nil {
+            firstRow = 0
+        } else {
+            var hi = 1
+            while terminal.getScrollInvariantLine(row: hi) == nil {
+                if hi > 1 << 24 { matchTotal = 0; return }
+                hi <<= 1
+            }
+            var lo = hi >> 1
+            while lo < hi {
+                let mid = (lo + hi) >> 1
+                if terminal.getScrollInvariantLine(row: mid) == nil {
+                    lo = mid + 1
+                } else {
+                    hi = mid
+                }
+            }
+            firstRow = lo
+        }
+
+        var count = 0
+        var bytesScanned = 0
+        var row = firstRow
+        let lower = term.lowercased()
+        let perRowCap = Self.maxScrollbackLineChars
+        let totalCap = 16 * 1024 * 1024
+        while let line = terminal.getScrollInvariantLine(row: row) {
+            var s = line.translateToString(
+                trimRight: true,
+                characterProvider: { let c = $0.getCharacter(); return c == "\0" ? " " : c }
+            ).lowercased()
+            if s.count > perRowCap { s = String(s.prefix(perRowCap)) }
+            bytesScanned += s.utf8.count
+            if !s.isEmpty {
+                var idx = s.startIndex
+                while let r = s.range(of: lower, range: idx..<s.endIndex) {
+                    count += 1
+                    idx = r.upperBound
+                }
+            }
+            row += 1
+            if row - firstRow > 200_000 || bytesScanned > totalCap { break }
+        }
+        matchTotal = count
     }
 
     /// Clear scrollback and screen (Cmd+K behaviour). Feeds ESC sequences directly
@@ -564,15 +874,18 @@ final class TerminalWindowView: NSView {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
             guard let self else { return }
             self.applyTheme(self.theme)
-            if let text = self.restoredScrollback, !text.isEmpty {
+            if let raw = self.restoredScrollback, !raw.isEmpty {
                 self.restoredScrollback = nil
-                // Strip all ANSI/OSC escape sequences from the persisted scrollback
-                // before re-feeding it. Without this, a tampered workspace.json could
-                // inject OSC sequences (e.g. OSC 8 hyperlinks, OSC 1337 file transfers,
-                // title-setting sequences) into the running terminal.
-                // NUL bytes (U+0000) arise from terminal cells that were never explicitly
-                // written (cursor-positioned TUI layouts). Replace them with spaces so they
-                // render correctly when re-fed to the terminal emulator.
+                // Cap restored bytes — workspace.json is untrusted on disk.
+                let text = raw.count > Self.maxScrollbackTotalChars
+                    ? String(raw.suffix(Self.maxScrollbackTotalChars))
+                    : raw
+                // Strip all ANSI/OSC escape sequences (incl. 8-bit C1) from the
+                // persisted scrollback before re-feeding it. Without this, a tampered
+                // workspace.json could inject OSC sequences (OSC 8 hyperlinks, OSC 1337
+                // file transfers, title spoofing) into the running terminal.
+                // NUL bytes (U+0000) arise from terminal cells never explicitly written
+                // (cursor-positioned TUI layouts). Replace them with spaces.
                 let safe = TerminalWindowView.stripEscapeSequences(text)
                     .replacingOccurrences(of: "\u{0000}", with: " ")
                 // Dim color + italic, then show saved content, then reset
@@ -584,39 +897,63 @@ final class TerminalWindowView: NSView {
 
     /// Remove ANSI CSI sequences (`ESC [ … m/A/B/…`), OSC sequences
     /// (`ESC ] … BEL/ST`), and bare `ESC X` two-character sequences from `text`.
-    /// Used to sanitise persisted scrollback before re-feeding it to the terminal.
+    /// Also handles the 8-bit C1 single-byte equivalents (0x9B CSI, 0x9D OSC,
+    /// 0x90 DCS, 0x9E PM, 0x9F APC, 0x98 SOS) which xterm-class parsers (including
+    /// SwiftTerm) honour and which UTF-8-encode to U+0080–U+009F (two bytes
+    /// 0xC2 0x9X). A tampered workspace.json scrollback containing raw 0x9D…BEL
+    /// would otherwise inject an OSC sequence when re-fed at launch.
     static func stripEscapeSequences(_ text: String) -> String {
         var result = ""
         result.reserveCapacity(text.count)
         var iter = text.unicodeScalars.makeIterator()
         while let ch = iter.next() {
-            guard ch == "\u{1B}" else { result.unicodeScalars.append(ch); continue }
-            // Peek at the next character to classify the sequence type.
-            guard let next = iter.next() else { break }
-            switch next {
-            case "[":
-                // CSI: consume until a byte in 0x40–0x7E (the final byte)
-                while let c = iter.next() {
-                    if c.value >= 0x40 && c.value <= 0x7E { break }
+            // 7-bit ESC-introduced or 8-bit C1 single-byte introducer.
+            if ch == "\u{1B}" {
+                guard let next = iter.next() else { break }
+                consumeEscapeBody(intro: next, iter: &iter)
+            } else if (0x80...0x9F).contains(ch.value) {
+                // Map C1 to its 7-bit equivalent introducer and consume.
+                let mapped: Unicode.Scalar
+                switch ch.value {
+                case 0x9B: mapped = "["
+                case 0x9D: mapped = "]"
+                case 0x90: mapped = "P"
+                case 0x9E: mapped = "^"
+                case 0x9F: mapped = "_"
+                case 0x98: mapped = "X"
+                default:
+                    // Other C1 controls — just drop the single byte.
+                    continue
                 }
-            case "]",   // OSC  (Operating System Command)
-                 "P",   // DCS  (Device Control String)
-                 "X",   // SOS  (Start of String)
-                 "^",   // PM   (Privacy Message)
-                 "_":   // APC  (Application Program Command)
-                // All ST-terminated sequences: consume until BEL (0x07) or ST (ESC \)
-                var prev: Unicode.Scalar = "\u{00}"
-                while let c = iter.next() {
-                    if c == "\u{07}" { break }
-                    if prev == "\u{1B}" && c == "\\" { break }
-                    prev = c
-                }
-            default:
-                // Two-character escape sequence — already consumed `next`; discard it.
-                break
+                consumeEscapeBody(intro: mapped, iter: &iter)
+            } else {
+                result.unicodeScalars.append(ch)
             }
         }
         return result
+    }
+
+    /// Consume the body of an escape sequence given its post-introducer class byte.
+    /// Mutating because the iterator is advanced.
+    private static func consumeEscapeBody(intro: Unicode.Scalar,
+                                          iter: inout String.UnicodeScalarView.Iterator) {
+        switch intro {
+        case "[":
+            // CSI: consume until a final byte in 0x40–0x7E.
+            while let c = iter.next() {
+                if c.value >= 0x40 && c.value <= 0x7E { break }
+            }
+        case "]", "P", "X", "^", "_":
+            // ST-terminated: consume until BEL, ESC \, or 8-bit ST (U+009C).
+            var prev: Unicode.Scalar = "\u{00}"
+            while let c = iter.next() {
+                if c == "\u{07}" || c == "\u{9C}" { break }
+                if prev == "\u{1B}" && c == "\\" { break }
+                prev = c
+            }
+        default:
+            break       // Two-character escape; introducer already consumed.
+        }
     }
 
     func applyTerminalSettings(_ settings: TerminalSettings) {
@@ -635,7 +972,9 @@ final class TerminalWindowView: NSView {
         termView.font = theme.terminalFont
         termView.feed(text: theme.oscSequences)
         layer?.backgroundColor = theme.terminalBackground.cgColor
-        titleBar.applyTheme(background: theme.terminalBackground, foreground: theme.terminalForeground)
+        // syncTitleBarColor preserves the broadcast tint when active; calling
+        // titleBar.applyTheme directly would clobber it.
+        syncTitleBarColor()
         updateBorder()
     }
 
@@ -735,6 +1074,25 @@ final class TerminalWindowView: NSView {
     func focusTerminal() {
         window?.makeFirstResponder(termView)
     }
+
+    // SwiftTerm's pendingDisplay throttle races between background feeds and
+    // main-thread resets; long-running apps occasionally see it stick `true`,
+    // freezing the view until a scroll forces setNeedsDisplay. Nudge AppKit
+    // ourselves whenever the buffer has unrendered updates.
+    private var redrawWatchdog: DispatchSourceTimer?
+
+    private func startRedrawWatchdog() {
+        let t = DispatchSource.makeTimerSource(queue: .main)
+        t.schedule(deadline: .now() + 1, repeating: 1, leeway: .milliseconds(200))
+        t.setEventHandler { [weak self] in
+            guard let self, self.termView.getTerminal().getUpdateRange() != nil else { return }
+            self.termView.needsDisplay = true
+        }
+        t.resume()
+        redrawWatchdog = t
+    }
+
+    deinit { redrawWatchdog?.cancel() }
 
     // MARK: - Input broadcasting
 

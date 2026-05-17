@@ -115,4 +115,28 @@ struct TerminalSettingsTests {
         // Guard against a new case being added without a display name.
         #expect(TerminalSettings.StoredCursorStyle.allCases.count == 6)
     }
+
+    // MARK: - scrollbackLines clamp
+    //
+    // UserDefaults is shared with any process running as the user — a tampered
+    // blob with Int.max would otherwise be forwarded to SwiftTerm's buffer
+    // allocator on every new terminal. init(from:) clamps to 0...100_000.
+
+    @Test func scrollbackClampsUpperBound() throws {
+        let blob = #"{"scrollbackLines":99999999}"#.data(using: .utf8)!
+        let decoded = try JSONDecoder().decode(TerminalSettings.self, from: blob)
+        #expect(decoded.scrollbackLines == 100_000)
+    }
+
+    @Test func scrollbackClampsLowerBound() throws {
+        let blob = #"{"scrollbackLines":-50}"#.data(using: .utf8)!
+        let decoded = try JSONDecoder().decode(TerminalSettings.self, from: blob)
+        #expect(decoded.scrollbackLines == 0)
+    }
+
+    @Test func scrollbackValueWithinRangePreserved() throws {
+        let blob = #"{"scrollbackLines":2500}"#.data(using: .utf8)!
+        let decoded = try JSONDecoder().decode(TerminalSettings.self, from: blob)
+        #expect(decoded.scrollbackLines == 2500)
+    }
 }

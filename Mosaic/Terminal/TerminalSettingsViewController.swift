@@ -18,7 +18,7 @@ final class TerminalSettingsModel: ObservableObject {
     init() {
         let s = TerminalSettings.shared
         cursorStyle            = s.cursorStyle
-        scrollbackLines        = ""
+        scrollbackLines        = String(s.scrollbackLines)
         optionAsMetaKey        = s.optionAsMetaKey
         backspaceSendsControlH = s.backspaceSendsControlH
         allowMouseReporting    = s.allowMouseReporting
@@ -30,7 +30,9 @@ final class TerminalSettingsModel: ObservableObject {
     func buildSettings() -> TerminalSettings {
         var s = TerminalSettings()
         s.cursorStyle            = cursorStyle
-        s.scrollbackLines        = scrollbackLines.isEmpty ? TerminalSettings.shared.scrollbackLines : (Int(scrollbackLines) ?? 500)
+        // If the field is empty or non-numeric, keep the previously stored value
+        // rather than resetting to the default — the user likely cleared mid-edit.
+        s.scrollbackLines        = Int(scrollbackLines) ?? TerminalSettings.shared.scrollbackLines
         s.optionAsMetaKey        = optionAsMetaKey
         s.backspaceSendsControlH = backspaceSendsControlH
         s.allowMouseReporting    = allowMouseReporting

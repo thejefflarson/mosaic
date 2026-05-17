@@ -22,6 +22,29 @@ struct TerminalSettings: Codable {
     /// Flash the terminal border on bell / notification.
     var flashOnBell: Bool = true
 
+    init() {}
+
+    // Forward-compatible decoding: settings blobs written by older builds won't
+    // have keys for newly-added fields. Synthesized Codable requires every key,
+    // so a single missing field would discard the whole stored blob and make
+    // all settings look like they don't persist. Decode each key optionally
+    // and fall through to the property's default value.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.cursorStyle            = try c.decodeIfPresent(StoredCursorStyle.self, forKey: .cursorStyle)            ?? self.cursorStyle
+        // Clamp scrollback to a sane range — UserDefaults is shared with any process
+        // running as the user, so an Int.max in the stored blob would otherwise be
+        // forwarded to SwiftTerm's buffer allocator on every new terminal.
+        let raw = try c.decodeIfPresent(Int.self, forKey: .scrollbackLines) ?? self.scrollbackLines
+        self.scrollbackLines        = min(max(raw, 0), 100_000)
+        self.optionAsMetaKey        = try c.decodeIfPresent(Bool.self,             forKey: .optionAsMetaKey)        ?? self.optionAsMetaKey
+        self.backspaceSendsControlH = try c.decodeIfPresent(Bool.self,             forKey: .backspaceSendsControlH) ?? self.backspaceSendsControlH
+        self.allowMouseReporting    = try c.decodeIfPresent(Bool.self,             forKey: .allowMouseReporting)    ?? self.allowMouseReporting
+        self.useBrightColors        = try c.decodeIfPresent(Bool.self,             forKey: .useBrightColors)        ?? self.useBrightColors
+        self.panOnBell              = try c.decodeIfPresent(Bool.self,             forKey: .panOnBell)              ?? self.panOnBell
+        self.flashOnBell            = try c.decodeIfPresent(Bool.self,             forKey: .flashOnBell)            ?? self.flashOnBell
+    }
+
     // MARK: - Persistence
 
     static var shared: TerminalSettings {

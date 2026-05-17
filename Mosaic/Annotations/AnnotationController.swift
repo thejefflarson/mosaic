@@ -178,17 +178,30 @@ final class AnnotationController {
             add(av)
 
         case .image:
-            guard let path = s.imagePath else { return }
-            // Restrict loads to the app's own Images directory — prevents path traversal
-            // from a tampered workspace.json reading arbitrary files.
-            let allowedPrefix = WorkspaceStore.shared.imagesDirectory.path
-            guard path.hasPrefix(allowedPrefix + "/") || path == allowedPrefix else { return }
-            guard let image = NSImage(contentsOfFile: path) else { return }
+            guard let path = s.imagePath,
+                  let safePath = Self.containedImagePath(path,
+                                                         imagesDirectory: WorkspaceStore.shared.imagesDirectory)
+            else { return }
+            guard let image = NSImage(contentsOfFile: safePath) else { return }
             let av = ImageAnnotationView(at: frame.origin, image: image)
             av.frame = frame
             av.applyTheme(theme())
             add(av)
         }
+    }
+
+    /// Validate that `path` resolves to a file under `imagesDirectory` after
+    /// canonicalisation (folds `..` segments and symlinks). Returns the canonical
+    /// path on success; nil if the path escapes the directory.
+    /// Pulled out as a static function so we can unit-test the containment.
+    static func containedImagePath(_ path: String, imagesDirectory: URL) -> String? {
+        let allowedRoot = URL(fileURLWithPath: imagesDirectory.path)
+            .resolvingSymlinksInPath().standardizedFileURL
+        let candidate = URL(fileURLWithPath: path)
+            .resolvingSymlinksInPath().standardizedFileURL
+        let rootPath = allowedRoot.path.hasSuffix("/") ? allowedRoot.path : allowedRoot.path + "/"
+        guard candidate.path == allowedRoot.path || candidate.path.hasPrefix(rootPath) else { return nil }
+        return candidate.path
     }
 
     // MARK: - Delete-tool helpers

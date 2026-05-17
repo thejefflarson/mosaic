@@ -21,7 +21,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         _ = OpenTerminalCommand.self
         _ = CountTerminalsCommand.self
         _ = CwdCommand.self
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+        // Notification permission is requested lazily on first need (see
+        // requestNotificationAuthorizationIfNeeded) — asking at launch front-loads
+        // a permission prompt the user may not want yet.
+        MainThreadWatchdog.start()
+    }
+
+    private nonisolated(unsafe) static var notificationAuthorizationRequested = false
+
+    /// Call before posting a UNUserNotification — requests permission the first
+    /// time only, and is a no-op thereafter. Safe to call repeatedly.
+    static func requestNotificationAuthorizationIfNeeded() {
+        guard !notificationAuthorizationRequested else { return }
+        notificationAuthorizationRequested = true
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { granted, _ in
+            if !granted {
+                NSLog("[Mosaic] notification authorization denied")
+            }
+        }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -140,10 +157,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         editMenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
         editMenu.addItem(NSMenuItem.separator())
 
-        // Find submenu — actions travel to the focused terminal view via responder chain
+        // Find — selector resolves on the focused terminal via the responder chain.
+        let findPanelAction = #selector(NSTextView.performFindPanelAction(_:))
         let findMenuItem = NSMenuItem(title: "Find", action: nil, keyEquivalent: "")
         let findMenu = NSMenu(title: "Find")
-        let findPanelAction = #selector(CanvasViewController.performFindPanelAction(_:))
         let findItem = NSMenuItem(title: "Find…", action: findPanelAction, keyEquivalent: "f")
         findItem.tag = Int(NSFindPanelAction.showFindPanel.rawValue)
         findMenu.addItem(findItem)
@@ -172,7 +189,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         viewMenu.addItem(withTitle: "Reset Zoom",
                          action: #selector(CanvasViewController.resetZoom),
                          keyEquivalent: "0")
-        // "Fit All Windows" intentionally has no shortcut — Cmd+F is reserved for Find
         viewMenu.addItem(withTitle: "Fit All Windows",
                          action: #selector(CanvasViewController.fitAll),
                          keyEquivalent: "")
@@ -208,8 +224,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         NSApp.windowsMenu = windowMenu
 
         windowMenu.addItem(withTitle: "Close Terminal",
-                           action: #selector(CanvasViewController.closeActiveTerminal),
+                           action: #selector(CanvasViewController.closeActiveTerminal(_:)),
                            keyEquivalent: "w")
+        let closeWindowItem = NSMenuItem(
+            title: "Close Window",
+            action: #selector(NSWindow.performClose(_:)),
+            keyEquivalent: "w")
+        closeWindowItem.keyEquivalentModifierMask = [.command, .shift]
+        windowMenu.addItem(closeWindowItem)
         windowMenu.addItem(NSMenuItem.separator())
         windowMenu.addItem(withTitle: "Minimize",
                            action: #selector(NSWindow.miniaturize(_:)),

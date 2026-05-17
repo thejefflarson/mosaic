@@ -15,6 +15,11 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
       - name: Install xcodegen
+        # TODO: pin to a release tarball with a known SHA256 to avoid a compromised
+        # Homebrew formula landing silently in CI. To pin: pick a version from
+        # https://github.com/yonaskolb/XcodeGen/releases, download xcodegen.zip,
+        # compute `shasum -a 256 xcodegen.zip`, and replace this step with a
+        # curl + checksum-verify + install sequence using that SHA.
         run: brew install xcodegen
 
       - name: Generate Xcode project
