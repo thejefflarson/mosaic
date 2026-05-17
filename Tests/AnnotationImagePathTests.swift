@@ -7,6 +7,7 @@ import Foundation
 /// A tampered workspace.json could specify an imagePath that escapes the app's
 /// Images directory via `..` segments or a symlink. The validator must
 /// canonicalise both sides before the prefix check.
+@MainActor
 struct AnnotationImagePathTests {
 
     /// Per-test temp directory acting as the Images root.
