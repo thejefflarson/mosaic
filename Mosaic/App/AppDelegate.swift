@@ -24,7 +24,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // Notification permission is requested lazily on first need (see
         // requestNotificationAuthorizationIfNeeded) — asking at launch front-loads
         // a permission prompt the user may not want yet.
-        MainThreadWatchdog.start()
     }
 
     private nonisolated(unsafe) static var notificationAuthorizationRequested = false
