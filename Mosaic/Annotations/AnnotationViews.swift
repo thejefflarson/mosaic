@@ -568,6 +568,9 @@ final class FreehandAnnotationView: AnnotationView {
 
     /// Restore from world points (used when loading from snapshot).
     func loadWorldPoints(_ pts: [CGPoint]) {
+        // Cap point count — a tampered workspace.json with millions of points would
+        // exhaust heap memory during restore.
+        let pts = pts.count > 100_000 ? Array(pts.prefix(100_000)) : pts
         guard !pts.isEmpty else { return }
         let xs = pts.map(\.x), ys = pts.map(\.y)
         let p = FreehandAnnotationView.pad

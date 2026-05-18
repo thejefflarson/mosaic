@@ -146,7 +146,12 @@ final class AnnotationController {
 
     // MARK: - Restore from snapshot
 
+    /// Cap on annotations restored from a snapshot. A tampered workspace.json with
+    /// tens of thousands of entries would cause OOM or a beachball at launch.
+    static let maxRestoredAnnotations = 500
+
     func restore(_ s: AnnotationSnapshot) {
+        guard annotations.count < Self.maxRestoredAnnotations else { return }
         let frame = CGRect(x: s.x, y: s.y, width: s.width, height: s.height)
         switch s.kind {
         case .text:
