@@ -21,6 +21,19 @@ final class TerminalController {
         return allowedShells.contains(canonical) ? canonical : defaultShell
     }
 
+    /// Return true when the binary at `path` is owned by root (uid 0) and not
+    /// group- or world-writable. Defends against a tampered /etc/shells entry on a
+    /// SIP-disabled system pointing to a user-writable payload.
+    private static func isShellBinaryTrustworthy(atPath path: String) -> Bool {
+        guard FileManager.default.isExecutableFile(atPath: path),
+              let attrs = try? FileManager.default.attributesOfItem(atPath: path),
+              let ownerID = attrs[.ownerAccountID] as? Int,
+              let perms   = attrs[.posixPermissions] as? Int
+        else { return false }
+        // Root-owned and not group-writable (0o020) or world-writable (0o002).
+        return ownerID == 0 && (perms & 0o022) == 0
+    }
+
     /// Shell paths allowed when restoring from a snapshot. Built from /etc/shells
     /// plus the current $SHELL and the built-in default; cached at first read.
     static let allowedShells: Set<String> = {
@@ -28,7 +41,8 @@ final class TerminalController {
         if let data = try? String(contentsOfFile: "/etc/shells", encoding: .utf8) {
             for raw in data.split(separator: "\n") {
                 let line = raw.trimmingCharacters(in: .whitespaces)
-                if !line.isEmpty && !line.hasPrefix("#") {
+                if !line.isEmpty && !line.hasPrefix("#")
+                   && Self.isShellBinaryTrustworthy(atPath: line) {
                     set.insert(
                         URL(fileURLWithPath: line).resolvingSymlinksInPath().standardizedFileURL.path)
                 }
@@ -271,6 +285,18 @@ final class TerminalController {
     // MARK: - Broadcast
 
     func toggleBroadcast() {
+        if !broadcastMode {
+            // Require explicit confirmation before enabling broadcast mode.
+            // Once active, every keystroke is silently mirrored to all open terminals
+            // with no further prompt — a mistaken activation can have wide impact.
+            let alert = NSAlert()
+            alert.messageText = "Enable Broadcast Mode?"
+            alert.informativeText = "All keystrokes will be mirrored to every open terminal until you disable broadcast mode."
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "Enable Broadcast")
+            alert.addButton(withTitle: "Cancel")
+            guard alert.runModal() == .alertFirstButtonReturn else { return }
+        }
         broadcastMode.toggle()
         canvasView?.broadcastModeActive = broadcastMode
         manager.windows.forEach { $0.setBroadcastHighlight(broadcastMode) }

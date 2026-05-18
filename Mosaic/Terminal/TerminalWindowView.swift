@@ -1,4 +1,5 @@
 import AppKit
+import os
 @preconcurrency import SwiftTerm
 
 /// Thin subclass that intercepts outgoing key data for broadcast mode
@@ -11,7 +12,17 @@ final class InterceptingTerminalView: LocalProcessTerminalView {
 
     /// Cached before background dispatch — startProcess calls getWindowSize() which
     /// reads self.frame; NSView.frame must only be accessed on the main thread.
-    nonisolated(unsafe) var cachedWindowSize: winsize?
+    /// OSAllocatedUnfairLock provides actual synchronisation between the main thread
+    /// (write/clear) and the background startProcess thread (read via getWindowSize).
+    /// nonisolated(unsafe) lets the computed property be called from a non-isolated
+    /// context without a Swift 6 concurrency error.
+    private nonisolated(unsafe) let _windowSizeBox =
+        OSAllocatedUnfairLock<winsize?>(initialState: nil)
+
+    nonisolated var cachedWindowSize: winsize? {
+        get { _windowSizeBox.withLock { $0 } }
+        set { _windowSizeBox.withLock { $0 = newValue } }
+    }
 
     override func getWindowSize() -> winsize {
         cachedWindowSize ?? super.getWindowSize()
@@ -25,12 +36,24 @@ final class InterceptingTerminalView: LocalProcessTerminalView {
     override func send(source: TerminalView, data: ArraySlice<UInt8>) {
         super.send(source: source, data: data)   // PTY receives input as normal
         guard !suppressBroadcast else { return }
-        // ESC [ ? and ESC [ > are DEC private mode prefixes used only in terminal
-        // protocol responses (DA1/DA2, XTWINOPS, etc.), never in user keystrokes.
-        if data.count >= 3,
-           data[data.startIndex] == 0x1B,
-           data[data.startIndex + 1] == 0x5B,
-           data[data.startIndex + 2] == 0x3F || data[data.startIndex + 2] == 0x3E {
+        // Filter out terminal protocol responses that are never produced by user
+        // keystrokes so they don't fan out to peer terminals in broadcast mode.
+        //
+        // ESC [ ? / ESC [ > — DEC private mode prefixes (DA1, DA2, XTWINOPS, CPR).
+        // ESC P / ESC ] / ESC X / ESC ^ / ESC _ — DCS/OSC/SOS/PM/APC introducers.
+        // 8-bit C1 (0x90–0x9F) — single-byte equivalents of the above.
+        let b0 = data[data.startIndex]
+        if b0 == 0x1B, data.count >= 2 {
+            let b1 = data[data.startIndex + 1]
+            switch b1 {
+            case 0x50, 0x5D, 0x58, 0x5E, 0x5F:   // DCS, OSC, SOS, PM, APC
+                return
+            case 0x5B where data.count >= 3:        // CSI — only DEC private responses
+                let b2 = data[data.startIndex + 2]
+                if b2 == 0x3F || b2 == 0x3E { return }
+            default: break
+            }
+        } else if b0 >= 0x90 && b0 <= 0x9F {       // 8-bit C1 (DCS … APC)
             return
         }
         onSendData?(data)
@@ -85,7 +108,10 @@ final class InterceptingTerminalView: LocalProcessTerminalView {
         for s in text.unicodeScalars {
             switch s.value {
             case 0x202A...0x202E, 0x2066...0x2069,            // bidi overrides / isolates
-                 0x200B...0x200D, 0x2060, 0xFEFF:             // zero-width
+                 0x200B...0x200D, 0x2060, 0xFEFF,             // zero-width
+                 0xFE00...0xFE0F,                              // variation selectors
+                 0xE0100...0xE01EF,                            // variation selectors supplement
+                 0xE0000...0xE007F:                            // Unicode TAG block
                 continue
             case 0x2028, 0x2029:                              // line/paragraph separator
                 out.append("\n")
@@ -165,23 +191,61 @@ final class InterceptingTerminalView: LocalProcessTerminalView {
         }
     }
 
+    /// Intercept paste to warn before sending multi-line clipboard content to the PTY.
+    /// Each newline acts as Enter in the terminal and may immediately execute whatever
+    /// text precedes it — clipboard-poisoned content could silently run commands.
+    /// Skipped when bracketed-paste mode is active; the shell handles newlines safely
+    /// in that mode by not executing until the user presses Enter explicitly.
+    override func paste(_ sender: Any?) {
+        guard !getTerminal().bracketedPasteMode,
+              let text = NSPasteboard.general.string(forType: .string),
+              text.contains("\n") || text.contains("\r") else {
+            super.paste(sender)
+            return
+        }
+        let newlineCount = text.unicodeScalars.filter { $0 == "\n" || $0 == "\r" }.count
+        let alert = NSAlert()
+        alert.messageText = "Paste \(newlineCount) Line\(newlineCount == 1 ? "" : "s")?"
+        alert.informativeText = "The clipboard contains newlines. Each newline acts as Enter in the terminal and may execute commands immediately."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Paste")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        super.paste(sender)
+    }
+
     /// Open a link resolved from an OSC 8 payload or from implicit link detection.
     /// SwiftTerm's default only handles URLs with a scheme — plain file paths like
     /// `Mosaic/App/AppDelegate.swift` or `src/foo.rs:42:10` fall through and error
     /// out. We resolve them against the terminal's cwd and open the file.
     public func requestOpenLink(source _: TerminalView, link: String, params _: [String: String]) {
-        let url = Self.resolveOpenableURL(
-            for: link,
-            cwd: enclosingTerminalWindowView?.currentCwd ?? FileManager.default.homeDirectoryForCurrentUser.path)
-        if let url { NSWorkspace.shared.open(url) }
+        let cwd = enclosingTerminalWindowView?.currentCwd
+            ?? FileManager.default.homeDirectoryForCurrentUser.path
+        guard let url = Self.resolveOpenableURL(for: link, cwd: cwd) else { return }
+        // Always confirm before opening PTY-supplied links. Terminal output is untrusted;
+        // a crafted OSC 8 payload could target local files or app-registered URL schemes.
+        let alert = NSAlert()
+        alert.messageText = "Open Link?"
+        let display = url.absoluteString.count > 200
+            ? String(url.absoluteString.prefix(197)) + "…"
+            : url.absoluteString
+        alert.informativeText = "Terminal wants to open:\n\(display)"
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "Open")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        NSWorkspace.shared.open(url)
     }
 
-    /// Schemes that are categorically dangerous from untrusted terminal output
-    /// and we refuse to hand to NSWorkspace. Everything else is allowed —
-    /// users legitimately click `vscode://`, `slack://`, `zoom://`, custom
-    /// editor schemes, etc. and we don't want to break that workflow.
-    /// `file://` is handled separately (path-containment check below).
-    static let deniedLinkSchemes: Set<String> = ["javascript", "data", "vbscript"]
+    /// Schemes that are categorically blocked regardless of the user confirmation
+    /// dialog in requestOpenLink. The confirmation dialog is the primary mitigation
+    /// for untrusted link opens; this deny-list provides defence-in-depth for schemes
+    /// that must never reach NSWorkspace under any circumstances.
+    /// `file://` is handled separately via path-containment checks below.
+    static let deniedLinkSchemes: Set<String> = [
+        "javascript", "data", "vbscript",   // script injection
+        "jar", "ms-its",                     // historic code-execution vectors
+    ]
 
     /// Pure function so we can unit-test without an NSWorkspace side effect.
     static func resolveOpenableURL(for link: String, cwd: String) -> URL? {
@@ -598,7 +662,17 @@ final class TerminalWindowView: NSView {
             let title = InterceptingTerminalView.sanitizeNotificationText(parsed.title, max: 128)
             let body  = InterceptingTerminalView.sanitizeNotificationText(parsed.body,  max: 512)
             Task { @MainActor [weak self] in
-                self?.onNotification?(title, body)
+                guard let self else { return }
+                // Rate-limit: drop notifications exceeding 10 per minute to prevent
+                // a PTY process from spamming macOS Notification Centre via OSC 777.
+                let now = Date()
+                if now.timeIntervalSince(self.notificationWindowStart) >= 60 {
+                    self.notificationCount = 0
+                    self.notificationWindowStart = now
+                }
+                guard self.notificationCount < 10 else { return }
+                self.notificationCount += 1
+                self.onNotification?(title, body)
             }
         }
 
@@ -658,6 +732,13 @@ final class TerminalWindowView: NSView {
 
     private var matchTotal: Int = 0
     private var matchIndex: Int = 0  // 1-based; 0 means no current match
+
+    // MARK: - Notification rate limiter
+
+    /// Rolling-window counter limiting OSC 777 notifications to ≤ 10 per minute.
+    /// Prevents a PTY process from spamming the user's macOS notification centre.
+    private var notificationCount = 0
+    private var notificationWindowStart = Date.distantPast
 
     func showFindBar() {
         let bar = ensureFindBar()
@@ -1137,6 +1218,14 @@ extension TerminalWindowView: LocalProcessTerminalViewDelegate {
         guard let dir = directory else { return }
         // SwiftTerm passes a file:// URL; extract the plain POSIX path.
         let path = URL(string: dir)?.path ?? dir
+        // Validate before storing. An adversarial PTY could emit crafted OSC 7 payloads
+        // to redirect resolveOpenableURL() (used for relative OSC 8 targets) to any
+        // existing path on disk — e.g. pointing it at /tmp/payload then sending an
+        // OSC 8 link of "file.txt" would open /tmp/payload/file.txt.
+        guard !path.isEmpty, !path.contains("\0") else { return }
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: path, isDirectory: &isDir),
+              isDir.boolValue else { return }
         Task { @MainActor [weak self] in
             self?.currentCwd = path
         }
