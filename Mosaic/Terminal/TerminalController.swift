@@ -42,7 +42,7 @@ final class TerminalController {
             for raw in data.split(separator: "\n") {
                 let line = raw.trimmingCharacters(in: .whitespaces)
                 if !line.isEmpty && !line.hasPrefix("#")
-                   && Self.isShellBinaryTrustworthy(atPath: line) {
+                   && TerminalController.isShellBinaryTrustworthy(atPath: line) {
                     set.insert(
                         URL(fileURLWithPath: line).resolvingSymlinksInPath().standardizedFileURL.path)
                 }

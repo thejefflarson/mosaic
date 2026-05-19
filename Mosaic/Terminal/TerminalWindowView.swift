@@ -12,12 +12,10 @@ final class InterceptingTerminalView: LocalProcessTerminalView {
 
     /// Cached before background dispatch — startProcess calls getWindowSize() which
     /// reads self.frame; NSView.frame must only be accessed on the main thread.
-    /// OSAllocatedUnfairLock provides actual synchronisation between the main thread
-    /// (write/clear) and the background startProcess thread (read via getWindowSize).
-    /// nonisolated(unsafe) lets the computed property be called from a non-isolated
-    /// context without a Swift 6 concurrency error.
-    private nonisolated(unsafe) let _windowSizeBox =
-        OSAllocatedUnfairLock<winsize?>(initialState: nil)
+    /// OSAllocatedUnfairLock is Sendable and synchronises access between the main
+    /// thread (write/clear) and the background startProcess thread (read via
+    /// getWindowSize).
+    private let _windowSizeBox = OSAllocatedUnfairLock<winsize?>(initialState: nil)
 
     nonisolated var cachedWindowSize: winsize? {
         get { _windowSizeBox.withLock { $0 } }
@@ -197,10 +195,13 @@ final class InterceptingTerminalView: LocalProcessTerminalView {
     /// Skipped when bracketed-paste mode is active; the shell handles newlines safely
     /// in that mode by not executing until the user presses Enter explicitly.
     override func paste(_ sender: Any?) {
+        // SwiftTerm declares paste(_:) as `Any` (non-optional) so coerce
+        // explicitly to silence the Any?→Any warning.
+        let s: Any = sender ?? NSNull()
         guard !getTerminal().bracketedPasteMode,
               let text = NSPasteboard.general.string(forType: .string),
               text.contains("\n") || text.contains("\r") else {
-            super.paste(sender)
+            super.paste(s)
             return
         }
         let newlineCount = text.unicodeScalars.filter { $0 == "\n" || $0 == "\r" }.count
@@ -211,7 +212,7 @@ final class InterceptingTerminalView: LocalProcessTerminalView {
         alert.addButton(withTitle: "Paste")
         alert.addButton(withTitle: "Cancel")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
-        super.paste(sender)
+        super.paste(s)
     }
 
     /// Open a link resolved from an OSC 8 payload or from implicit link detection.
@@ -931,8 +932,14 @@ final class TerminalWindowView: NSView {
         // Run forkpty on a background thread so the ~2 s atfork-handler cost
         // (libBacktraceRecording) doesn't block the main thread and cause a beachball.
         // SwiftTerm annotates startProcess as @MainActor but the underlying forkpty
-        // call is thread-safe; the annotation is overly conservative. Calling from a
-        // background thread here is intentional and safe.
+        // call is thread-safe; the annotation is overly conservative.
+        //
+        // NOTE: Swift 6 emits "main actor-isolated method called in nonisolated
+        // context" here. We treat this as the documented-acceptable exception in
+        // CLAUDE.md (third-party API with an overly strict actor annotation we
+        // can't change). `@preconcurrency import SwiftTerm` already downgrades
+        // the error to a warning; further suppression would require unsafeBitCast
+        // hacks that hurt readability more than the warning does.
         DispatchQueue.global(qos: .userInitiated).async { [termView] in
             termView!.startProcess(
                 executable: shellPath,
