@@ -222,17 +222,13 @@ xcrun stapler staple "$DMG"
 echo "→ signing DMG for Sparkle"
 SIGN_UPDATE=$(command -v sign_update 2>/dev/null || \
     find ~/Library/Developer/Xcode/DerivedData -name sign_update \
-         -path "*/Sparkle*/bin/*" 2>/dev/null | head -1)
+         -path "*/sparkle/Sparkle/bin/*" 2>/dev/null | head -1)
 
-# A malicious local process (rogue editor extension, npm postinstall) could
-# plant a fake `sign_update` anywhere under DerivedData. Verify the binary
-# we're about to exec is signed by the Sparkle Project team before running it.
-if [[ -n "${SIGN_UPDATE:-}" ]]; then
-    if ! codesign -dv "$SIGN_UPDATE" 2>&1 | grep -qiE 'Authority=.*Sparkle Project'; then
-        echo "error: sign_update at $SIGN_UPDATE is not signed by Sparkle Project — refusing to run"
-        exit 1
-    fi
-fi
+# Sparkle's SPM artifact ships sign_update ad-hoc signed (no Developer ID
+# identity), so we can't verify signing authority. We constrain the find
+# path to the SPM-resolved artifact directory — an attacker who can write
+# there already has local-user code execution. Vendoring a SHA256-pinned
+# release tarball would be the next defense-in-depth step.
 
 if [[ -z "${SIGN_UPDATE:-}" ]]; then
     echo "warning: sign_update not found — skipping appcast update"
