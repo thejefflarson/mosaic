@@ -55,9 +55,13 @@ final class InterceptingTerminalView: LocalProcessTerminalView {
             switch b1 {
             case 0x50, 0x5D, 0x58, 0x5E, 0x5F:        // DCS, OSC, SOS, PM, APC
                 return false
-            case 0x5B where data.count >= 3:           // CSI — only DEC private responses
+            case 0x5B where data.count >= 3:           // CSI — DEC private + protocol responses
                 let b2 = data[data.startIndex + 2]
                 if b2 == 0x3F || b2 == 0x3E { return false }
+                // Block intermediate-byte sequences (e.g. DECSTR ESC[!p).
+                if b2 >= 0x20 && b2 <= 0x2F { return false }
+                // Block CPR (cursor position report ESC[row;colR) — terminal-generated.
+                if data[data.index(before: data.endIndex)] == 0x52 { return false }
             default: break
             }
         } else if b0 >= 0x90 && b0 <= 0x9F {           // 8-bit C1 (DCS … APC)
@@ -114,6 +118,10 @@ final class InterceptingTerminalView: LocalProcessTerminalView {
         out.reserveCapacity(text.unicodeScalars.count)
         for s in text.unicodeScalars {
             switch s.value {
+            case 0x00...0x08, 0x0B...0x0C, 0x0E...0x1F,      // C0 controls (keep \t \n \r)
+                 0x7F,                                         // DEL
+                 0x80...0x9F:                                  // 8-bit C1 (incl. ESC variants)
+                continue
             case 0x202A...0x202E, 0x2066...0x2069,            // bidi overrides / isolates
                  0x200B...0x200D, 0x2060, 0xFEFF,             // zero-width
                  0xFE00...0xFE0F,                              // variation selectors
@@ -236,10 +244,10 @@ final class InterceptingTerminalView: LocalProcessTerminalView {
         // a crafted OSC 8 payload could target local files or app-registered URL schemes.
         let alert = NSAlert()
         alert.messageText = "Open Link?"
-        let display = url.absoluteString.count > 200
-            ? String(url.absoluteString.prefix(197)) + "…"
-            : url.absoluteString
-        alert.informativeText = "Terminal wants to open:\n\(display)"
+        // Show the full URL so the user sees exactly what will be opened.
+        // Truncating the display string would let a crafted URL hide a malicious
+        // suffix behind the ellipsis while NSWorkspace.open() receives the full URL.
+        alert.informativeText = "Terminal wants to open:\n\(url.absoluteString)"
         alert.alertStyle = .informational
         alert.addButton(withTitle: "Open")
         alert.addButton(withTitle: "Cancel")
@@ -286,7 +294,7 @@ final class InterceptingTerminalView: LocalProcessTerminalView {
                   let scheme = url.scheme?.lowercased(),
                   // Avoid mis-classifying "hello.txt:42" — scheme must look like
                   // a real scheme (letters only, no dots) for the opaque branch.
-                  trimmed[..<colon].allSatisfy({ $0.isLetter }),
+                  trimmed[..<colon].allSatisfy({ $0.isASCII && $0.isLetter }),
                   !deniedLinkSchemes.contains(scheme) {
             return url
         }
@@ -306,6 +314,10 @@ final class InterceptingTerminalView: LocalProcessTerminalView {
         // Canonicalise to fold out `..` segments and symlinks before exists-check.
         let resolved = URL(fileURLWithPath: joined)
             .resolvingSymlinksInPath().standardizedFileURL.path
+        // Restrict to user's home subtree — cwd is PTY-controlled via OSC 7 and could
+        // otherwise redirect opens to arbitrary paths on disk after symlink resolution.
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        guard resolved == home || resolved.hasPrefix(home + "/") else { return nil }
         var isDir: ObjCBool = false
         guard FileManager.default.fileExists(atPath: resolved, isDirectory: &isDir) else { return nil }
         return URL(fileURLWithPath: resolved, isDirectory: isDir.boolValue)
@@ -627,7 +639,19 @@ final class TerminalWindowView: NSView {
                 self?.onBroadcastKey?(bytes)
             }
         }
-        termView.onBell = { [weak self] in self?.onBell?() }
+        termView.onBell = { [weak self] in
+            guard let self else { return }
+            // Rate-limit BEL to ≤ 10 per minute so a PTY cannot spam the system
+            // bell or UNNotificationCenter without bound.
+            let now = ProcessInfo.processInfo.systemUptime
+            if now - self.bellWindowStart >= 60 {
+                self.bellCount = 0
+                self.bellWindowStart = now
+            }
+            guard self.bellCount < 10 else { return }
+            self.bellCount += 1
+            self.onBell?()
+        }
         termView.nativeForegroundColor = theme.terminalForeground
         termView.nativeBackgroundColor = theme.terminalBackground
         addSubview(termView)
@@ -675,8 +699,9 @@ final class TerminalWindowView: NSView {
                 guard let self else { return }
                 // Rate-limit: drop notifications exceeding 10 per minute to prevent
                 // a PTY process from spamming macOS Notification Centre via OSC 777.
-                let now = Date()
-                if now.timeIntervalSince(self.notificationWindowStart) >= 60 {
+                // Monotonic systemUptime is immune to NTP steps and clock adjustments.
+                let now = ProcessInfo.processInfo.systemUptime
+                if now - self.notificationWindowStart >= 60 {
                     self.notificationCount = 0
                     self.notificationWindowStart = now
                 }
@@ -747,8 +772,15 @@ final class TerminalWindowView: NSView {
 
     /// Rolling-window counter limiting OSC 777 notifications to ≤ 10 per minute.
     /// Prevents a PTY process from spamming the user's macOS notification centre.
+    /// Uses monotonic systemUptime so an NTP step or manual clock change cannot
+    /// reset the window and allow an immediate burst bypass.
     private var notificationCount = 0
-    private var notificationWindowStart = Date.distantPast
+    private var notificationWindowStart: Double = -.infinity
+
+    /// Rolling-window counter limiting BEL to ≤ 10 per minute.
+    /// Mirrors the OSC 777 cap so a PTY cannot bypass the limit by using raw BEL.
+    private var bellCount = 0
+    private var bellWindowStart: Double = -.infinity
 
     func showFindBar() {
         let bar = ensureFindBar()
@@ -884,7 +916,9 @@ final class TerminalWindowView: NSView {
         var row = firstRow
         let lower = term.lowercased()
         let perRowCap = Self.maxScrollbackLineChars
-        let totalCap = 16 * 1024 * 1024
+        // Cap at 10 000 rows / 1 MB of text so a PTY that fills scrollback cannot
+        // block the MainActor for hundreds of milliseconds per find-bar keystroke.
+        let totalCap = 1 * 1024 * 1024
         while let line = terminal.getScrollInvariantLine(row: row) {
             var s = line.translateToString(
                 trimRight: true,
@@ -900,7 +934,7 @@ final class TerminalWindowView: NSView {
                 }
             }
             row += 1
-            if row - firstRow > 200_000 || bytesScanned > totalCap { break }
+            if row - firstRow > 10_000 || bytesScanned > totalCap { break }
         }
         matchTotal = count
     }
@@ -985,8 +1019,12 @@ final class TerminalWindowView: NSView {
                 // (cursor-positioned TUI layouts). Replace them with spaces.
                 let safe = TerminalWindowView.stripEscapeSequences(text)
                     .replacingOccurrences(of: "\u{0000}", with: " ")
-                // Dim color + italic, then show saved content, then reset
-                let dimmed = "\u{1B}[2;3m" + safe + "\u{1B}[0m\r\n"
+                // Dim color + italic, then show saved content, then reset.
+                // Prepend ST (ESC \) to close any dangling OSC/DCS sequence that
+                // stripEscapeSequences may have left at the truncation boundary —
+                // without it a bare ESC ] at the end would absorb the SGR reset as
+                // the OSC body, leaving the terminal permanently dim/italic.
+                let dimmed = "\u{1B}[2;3m" + safe + "\u{1B}\\\u{1B}[0m\r\n"
                 self.termView.feed(text: dimmed)
             }
         }
@@ -1222,10 +1260,16 @@ extension TerminalWindowView: LocalProcessTerminalViewDelegate {
     }
 
     nonisolated func setTerminalTitle(source: LocalProcessTerminalView, title: String) {
+        // Cap length and sanitize PTY-supplied title: strip bidi overrides (prevents
+        // RLO spoofing) and control bytes (prevents title-bar injection / unbounded
+        // allocation). Capping before sanitizing bounds the work done here.
+        let raw = title.count > 256 ? String(title.prefix(256)) : title
+        let safe = InterceptingTerminalView.sanitizeNotificationText(
+            InterceptingTerminalView.sanitizeForClipboard(raw), max: 256)
         Task { @MainActor [weak self] in
             self?.shellReady = true
-            self?.currentTitle = title
-            self?.titleBar.titleLabel.stringValue = title
+            self?.currentTitle = safe
+            self?.titleBar.titleLabel.stringValue = safe
             self?.syncTitleBarColor()
         }
     }
@@ -1239,6 +1283,10 @@ extension TerminalWindowView: LocalProcessTerminalViewDelegate {
         // existing path on disk — e.g. pointing it at /tmp/payload then sending an
         // OSC 8 link of "file.txt" would open /tmp/payload/file.txt.
         guard !path.isEmpty, !path.contains("\0") else { return }
+        // Restrict to home subtree so a crafted OSC 7 cannot give currentCwd full
+        // filesystem reach and redirect subsequent OSC 8 link opens outside ~/…
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        guard path == home || path.hasPrefix(home + "/") else { return }
         var isDir: ObjCBool = false
         guard FileManager.default.fileExists(atPath: path, isDirectory: &isDir),
               isDir.boolValue else { return }
