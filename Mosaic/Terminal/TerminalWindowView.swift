@@ -40,6 +40,7 @@ final class InterceptingTerminalView: LocalProcessTerminalView {
         // ESC [ ? / ESC [ > — DEC private mode prefixes (DA1, DA2, XTWINOPS, CPR).
         // ESC P / ESC ] / ESC X / ESC ^ / ESC _ — DCS/OSC/SOS/PM/APC introducers.
         // 8-bit C1 (0x90–0x9F) — single-byte equivalents of the above.
+        guard !data.isEmpty else { return }
         let b0 = data[data.startIndex]
         if b0 == 0x1B, data.count >= 2 {
             let b1 = data[data.startIndex + 1]
