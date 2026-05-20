@@ -1,110 +1,80 @@
-<?xml version="1.0" encoding="utf-8"?>
-<rss version="2.0"
-     xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle"
-     xmlns:dc="http://purl.org/dc/elements/1.1/">
+<?xml version='1.0' encoding='utf-8'?>
+<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
   <channel>
     <title>Mosaic</title>
     <link>https://github.com/thejefflarson/mosaic</link>
     <description>Mosaic changelog</description>
     <language>en</language>
-
     <item>
       <title>Mosaic 0.5.0</title>
       <pubDate>Wed, 25 Mar 2026 08:46:32 +0000</pubDate>
       <sparkle:version>1</sparkle:version>
       <sparkle:shortVersionString>0.5.0</sparkle:shortVersionString>
-      <enclosure url="https://github.com/thejefflarson/mosaic/releases/download/v0.5.0/Mosaic-v0.5.0.dmg"
-                 sparkle:edSignature="Kf75AAvMP6M2mkBCGZt+7ULyCe36KSfLQGq2tSFI2rxBdyNmXh2o6WxyvNAxkzgSw3Ftx4m7eJ2/CCQwbjvuDg=="
-                 length="3574762"
-                 type="application/octet-stream" />
+      <enclosure url="https://github.com/thejefflarson/mosaic/releases/download/v0.5.0/Mosaic-v0.5.0.dmg" sparkle:edSignature="Kf75AAvMP6M2mkBCGZt+7ULyCe36KSfLQGq2tSFI2rxBdyNmXh2o6WxyvNAxkzgSw3Ftx4m7eJ2/CCQwbjvuDg==" length="3574762" type="application/octet-stream" />
     </item>
-
     <item>
       <title>Mosaic 0.5.1</title>
       <pubDate>Mon, 30 Mar 2026 03:24:36 +0000</pubDate>
       <sparkle:version>1</sparkle:version>
       <sparkle:shortVersionString>0.5.1</sparkle:shortVersionString>
-      <enclosure url="https://github.com/thejefflarson/mosaic/releases/download/v0.5.1/Mosaic-v0.5.1.dmg"
-                 sparkle:edSignature="dDjKkiZWFP3D3Bu4B4iROfEpPSYUWvBhtYZlX3a5hx6XH9/1m1c042r1eEZUvBcpjf2e0e8fVL7lr9IDeO2qBg=="
-                 length="3580365"
-                 type="application/octet-stream" />
+      <enclosure url="https://github.com/thejefflarson/mosaic/releases/download/v0.5.1/Mosaic-v0.5.1.dmg" sparkle:edSignature="dDjKkiZWFP3D3Bu4B4iROfEpPSYUWvBhtYZlX3a5hx6XH9/1m1c042r1eEZUvBcpjf2e0e8fVL7lr9IDeO2qBg==" length="3580365" type="application/octet-stream" />
     </item>
-
     <item>
       <title>Mosaic 0.5.2</title>
       <pubDate>Mon, 30 Mar 2026 05:40:20 +0000</pubDate>
       <sparkle:version>1</sparkle:version>
       <sparkle:shortVersionString>0.5.2</sparkle:shortVersionString>
-      <enclosure url="https://github.com/thejefflarson/mosaic/releases/download/v0.5.2/Mosaic-v0.5.2.dmg"
-                 sparkle:edSignature="x4M/bh/4Q2TjLvEq028+ARFFC4sDLGl3UJHOA+BG/dC9JYoS0TBmvGkVruDIo77/JDfk1i9HdWCn/fjg6eH+Cw=="
-                 length="3584033"
-                 type="application/octet-stream" />
+      <enclosure url="https://github.com/thejefflarson/mosaic/releases/download/v0.5.2/Mosaic-v0.5.2.dmg" sparkle:edSignature="x4M/bh/4Q2TjLvEq028+ARFFC4sDLGl3UJHOA+BG/dC9JYoS0TBmvGkVruDIo77/JDfk1i9HdWCn/fjg6eH+Cw==" length="3584033" type="application/octet-stream" />
     </item>
-
     <item>
       <title>Mosaic 0.5.3</title>
       <pubDate>Mon, 30 Mar 2026 05:47:12 +0000</pubDate>
       <sparkle:version>1</sparkle:version>
       <sparkle:shortVersionString>0.5.3</sparkle:shortVersionString>
-      <enclosure url="https://github.com/thejefflarson/mosaic/releases/download/v0.5.3/Mosaic-v0.5.3.dmg"
-                 sparkle:edSignature="o2+oThKF909Z9d+dYZXb6tag6fskUYjAr3Zq7SQOFlZ9FsI+tXm3SQdDiEb1UHsDi8Cc6txye43U8WceB/ZWAw=="
-                 length="3584546"
-                 type="application/octet-stream" />
+      <enclosure url="https://github.com/thejefflarson/mosaic/releases/download/v0.5.3/Mosaic-v0.5.3.dmg" sparkle:edSignature="o2+oThKF909Z9d+dYZXb6tag6fskUYjAr3Zq7SQOFlZ9FsI+tXm3SQdDiEb1UHsDi8Cc6txye43U8WceB/ZWAw==" length="3584546" type="application/octet-stream" />
     </item>
-
     <item>
       <title>Mosaic 0.6.0</title>
       <pubDate>Wed, 01 Apr 2026 00:24:11 +0000</pubDate>
       <sparkle:version>1</sparkle:version>
       <sparkle:shortVersionString>0.6.0</sparkle:shortVersionString>
-      <enclosure url="https://github.com/thejefflarson/mosaic/releases/download/v0.6.0/Mosaic-v0.6.0.dmg"
-                 sparkle:edSignature="DW/ScrnLlSRcW7R1euYVEUH9fxFvbamEukvOB083GQlsQV7j8VUT2joi13xef/e40xUCjTpl5pJNG0c61yKEBA=="
-                 length="3588636"
-                 type="application/octet-stream" />
+      <enclosure url="https://github.com/thejefflarson/mosaic/releases/download/v0.6.0/Mosaic-v0.6.0.dmg" sparkle:edSignature="DW/ScrnLlSRcW7R1euYVEUH9fxFvbamEukvOB083GQlsQV7j8VUT2joi13xef/e40xUCjTpl5pJNG0c61yKEBA==" length="3588636" type="application/octet-stream" />
     </item>
-
     <item>
       <title>Mosaic 0.6.1</title>
       <pubDate>Wed, 01 Apr 2026 15:59:16 +0000</pubDate>
       <sparkle:version>4</sparkle:version>
       <sparkle:shortVersionString>0.6.1</sparkle:shortVersionString>
-      <enclosure url="https://github.com/thejefflarson/mosaic/releases/download/v0.6.1/Mosaic-v0.6.1.dmg"
-                 sparkle:edSignature="5You/4ePV2Hjr0z8WJi+JRo2Z7B28h2K0M3THV+JOh3XvV77gm0HacBtHnyp9ZIouTsaddhEv1IQdGuip54dDg=="
-                 length="3588730"
-                 type="application/octet-stream" />
+      <enclosure url="https://github.com/thejefflarson/mosaic/releases/download/v0.6.1/Mosaic-v0.6.1.dmg" sparkle:edSignature="5You/4ePV2Hjr0z8WJi+JRo2Z7B28h2K0M3THV+JOh3XvV77gm0HacBtHnyp9ZIouTsaddhEv1IQdGuip54dDg==" length="3588730" type="application/octet-stream" />
     </item>
-
     <item>
       <title>Mosaic 0.7.0</title>
       <pubDate>Mon, 13 Apr 2026 05:45:45 +0000</pubDate>
       <sparkle:version>8</sparkle:version>
       <sparkle:shortVersionString>0.7.0</sparkle:shortVersionString>
-      <enclosure url="https://github.com/thejefflarson/mosaic/releases/download/v0.7.0/Mosaic-v0.7.0.dmg"
-                 sparkle:edSignature="vcC0xh4bEF8gNgk80TXTY7mR6+LbeRai/QF/gGFwDa/HCX5AhgFHXncOfDqFR4CeADoK2F9R2IqDaAdfJsUEDw=="
-                 length="3591165"
-                 type="application/octet-stream" />
+      <enclosure url="https://github.com/thejefflarson/mosaic/releases/download/v0.7.0/Mosaic-v0.7.0.dmg" sparkle:edSignature="vcC0xh4bEF8gNgk80TXTY7mR6+LbeRai/QF/gGFwDa/HCX5AhgFHXncOfDqFR4CeADoK2F9R2IqDaAdfJsUEDw==" length="3591165" type="application/octet-stream" />
     </item>
-
     <item>
       <title>Mosaic 0.8.0</title>
       <pubDate>Fri, 17 Apr 2026 05:41:55 +0000</pubDate>
       <sparkle:version>10</sparkle:version>
       <sparkle:shortVersionString>0.8.0</sparkle:shortVersionString>
-      <enclosure url="https://github.com/thejefflarson/mosaic/releases/download/v0.8.0/Mosaic-v0.8.0.dmg"
-                 sparkle:edSignature="sRM+373jnPgCYCsjCGchFinz8uHQ4fgt7IazbTr5935YXPL5dFctK3j2EXvQ5DpqStWCDsKx0c/DlxTAgP4dCA=="
-                 length="3626627"
-                 type="application/octet-stream" />
+      <enclosure url="https://github.com/thejefflarson/mosaic/releases/download/v0.8.0/Mosaic-v0.8.0.dmg" sparkle:edSignature="sRM+373jnPgCYCsjCGchFinz8uHQ4fgt7IazbTr5935YXPL5dFctK3j2EXvQ5DpqStWCDsKx0c/DlxTAgP4dCA==" length="3626627" type="application/octet-stream" />
     </item>
-
     <item>
       <title>Mosaic 0.8.1</title>
       <pubDate>Fri, 17 Apr 2026 08:45:36 +0000</pubDate>
       <sparkle:version>12</sparkle:version>
       <sparkle:shortVersionString>0.8.1</sparkle:shortVersionString>
-      <enclosure url="https://github.com/thejefflarson/mosaic/releases/download/v0.8.1/Mosaic-v0.8.1.dmg"
-                 sparkle:edSignature="js04Rl+v1J7hWx3+hCvISwev67BzrGPBk2K40Fps1ug6pvW/iJ+4t6eQeKIryMiOlMOMO3h6+EwINj7uVuUxDw=="
-                 length="3624716"
-                 type="application/octet-stream" />
+      <enclosure url="https://github.com/thejefflarson/mosaic/releases/download/v0.8.1/Mosaic-v0.8.1.dmg" sparkle:edSignature="js04Rl+v1J7hWx3+hCvISwev67BzrGPBk2K40Fps1ug6pvW/iJ+4t6eQeKIryMiOlMOMO3h6+EwINj7uVuUxDw==" length="3624716" type="application/octet-stream" />
+    </item>
+    <item>
+      <title>Mosaic 0.9.0</title>
+      <pubDate>Wed, 20 May 2026 03:47:11 +0000</pubDate>
+      <sparkle:version>19</sparkle:version>
+      <sparkle:shortVersionString>0.9.0</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <enclosure url="https://github.com/thejefflarson/mosaic/releases/download/v0.9.0/Mosaic-v0.9.0.dmg" sparkle:edSignature="z8vPeTC/dGbAMuv/AlQwJAE4GHkogFcz4htKap7gjqnIL92Wf6NRGT2ijYHyMV4WihtiNDdl4zyWjOH4uUMyBQ==" length="3235259" type="application/octet-stream" />
     </item>
   </channel>
 </rss>
