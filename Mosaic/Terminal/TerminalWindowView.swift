@@ -33,29 +33,37 @@ final class InterceptingTerminalView: LocalProcessTerminalView {
     /// in response to application queries and are never produced by user keyboard input.
     override func send(source: TerminalView, data: ArraySlice<UInt8>) {
         super.send(source: source, data: data)   // PTY receives input as normal
-        guard !suppressBroadcast else { return }
-        // Filter out terminal protocol responses that are never produced by user
-        // keystrokes so they don't fan out to peer terminals in broadcast mode.
-        //
-        // ESC [ ? / ESC [ > — DEC private mode prefixes (DA1, DA2, XTWINOPS, CPR).
-        // ESC P / ESC ] / ESC X / ESC ^ / ESC _ — DCS/OSC/SOS/PM/APC introducers.
-        // 8-bit C1 (0x90–0x9F) — single-byte equivalents of the above.
-        guard !data.isEmpty else { return }
+        guard !suppressBroadcast, Self.shouldBroadcast(data) else { return }
+        onSendData?(data)
+    }
+
+    /// Return `true` if `data` looks like a user keystroke worth broadcasting,
+    /// `false` if it's a terminal protocol response that should stay local.
+    ///
+    /// Filtered prefixes (never produced by user keystrokes):
+    /// - `ESC [ ?` / `ESC [ >` — DEC private mode prefixes (DA1, DA2, XTWINOPS, CPR).
+    /// - `ESC P / ] / X / ^ / _` — DCS / OSC / SOS / PM / APC introducers.
+    /// - 8-bit C1 (`0x90–0x9F`) — single-byte equivalents of the above.
+    ///
+    /// Empty slices are also rejected — SwiftTerm hands us zero-byte slices on
+    /// some paste/insertText paths and subscripting an empty slice traps.
+    static func shouldBroadcast(_ data: ArraySlice<UInt8>) -> Bool {
+        guard !data.isEmpty else { return false }
         let b0 = data[data.startIndex]
         if b0 == 0x1B, data.count >= 2 {
             let b1 = data[data.startIndex + 1]
             switch b1 {
-            case 0x50, 0x5D, 0x58, 0x5E, 0x5F:   // DCS, OSC, SOS, PM, APC
-                return
-            case 0x5B where data.count >= 3:        // CSI — only DEC private responses
+            case 0x50, 0x5D, 0x58, 0x5E, 0x5F:        // DCS, OSC, SOS, PM, APC
+                return false
+            case 0x5B where data.count >= 3:           // CSI — only DEC private responses
                 let b2 = data[data.startIndex + 2]
-                if b2 == 0x3F || b2 == 0x3E { return }
+                if b2 == 0x3F || b2 == 0x3E { return false }
             default: break
             }
-        } else if b0 >= 0x90 && b0 <= 0x9F {       // 8-bit C1 (DCS … APC)
-            return
+        } else if b0 >= 0x90 && b0 <= 0x9F {           // 8-bit C1 (DCS … APC)
+            return false
         }
-        onSendData?(data)
+        return true
     }
 
     /// SwiftTerm's default linefeed clears selection on every output line, making it
