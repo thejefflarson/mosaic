@@ -27,6 +27,8 @@ Mosaic is a local macOS desktop application with no network-facing components. T
 
 **Terminal escape sequence injection** — Malicious output written to a PTY (e.g., from a remote shell session) could attempt to exploit the terminal emulator. Mosaic strips title-setting and other potentially dangerous OSC/DCS sequences before forwarding to SwiftTerm (`TerminalWindowView.stripEscapeSequences`). If you find a sequence that bypasses this filter, please report it.
 
+**OSC 8 link clicks** — Clickable links from terminal output (OSC 8 hyperlinks, implicitly detected paths) reach `NSWorkspace.open()` via a user-facing confirmation dialog that shows the full resolved URL. Custom URL schemes (e.g. `vscode://`, `slack://`) are passed through; a small deny-list blocks categorically dangerous schemes (`javascript:`, `data:`, `vbscript:`, `jar`, `ms-its`). File paths are canonicalised but not contained to a directory subtree. See `Docs/ADR/006-link-handling.md` for the full rationale.
+
 **Auto-update (Sparkle)** — Updates are delivered over HTTPS and verified with an Ed25519 signature before installation. The signing key is stored offline. If you find a way to bypass signature verification or intercept the update channel, please report it.
 
 **Workspace file parsing** — On launch, Mosaic loads `~/Library/Application Support/Mosaic/workspace.json`. Maliciously crafted JSON could potentially cause unexpected behavior. Mosaic uses Swift's `Codable` with no `eval` or dynamic dispatch on persisted data.

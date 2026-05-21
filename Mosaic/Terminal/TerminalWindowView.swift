@@ -275,13 +275,10 @@ final class InterceptingTerminalView: LocalProcessTerminalView {
     /// dialog. The dialog is the primary mitigation; this deny-list provides
     /// defence-in-depth for schemes that must never reach NSWorkspace.
     ///
-    /// IMPORTANT — deliberate design choice (do not re-flip to an allow-list):
-    /// users legitimately click custom app schemes from terminal output
-    /// (vscode://, slack://, cursor://, zoom://, obsidian://, x-callback-url://, …).
-    /// An allow-list silently no-ops those clicks. The confirmation dialog in
-    /// requestOpenLink shows the resolved URL before NSWorkspace.open() — that
-    /// is where social-engineering resistance lives. See LinkResolutionTests
-    /// `customSchemesPassThrough`.
+    /// **Do not flip to an allow-list.** See `Docs/ADR/006-link-handling.md`
+    /// for the rationale — custom app schemes (vscode://, slack://, cursor://,
+    /// zoom://, obsidian://, …) are legitimate user clicks; the confirmation
+    /// dialog in `requestOpenLink` is the social-engineering defence.
     /// `file://` is handled separately via path-resolution below.
     static let deniedLinkSchemes: Set<String> = [
         "javascript", "data", "vbscript",   // script injection
@@ -335,11 +332,9 @@ final class InterceptingTerminalView: LocalProcessTerminalView {
             : (cwd as NSString).appendingPathComponent(expanded)
 
         // Canonicalise to fold out `..` segments and symlinks before exists-check.
-        // No path-containment check here by design: clicking system paths like
-        // /etc/hosts or /var/log/foo from grep output is legitimate. The PTY
-        // OSC-7-cwd + OSC-8-link redirect threat is mitigated by the user-facing
-        // confirmation dialog in requestOpenLink, which displays the resolved
-        // URL before any NSWorkspace.open() call.
+        // No path-containment check here by design — see
+        // `Docs/ADR/006-link-handling.md`. The confirmation dialog in
+        // `requestOpenLink` shows the resolved path before NSWorkspace.open().
         let resolved = URL(fileURLWithPath: joined)
             .resolvingSymlinksInPath().standardizedFileURL.path
         var isDir: ObjCBool = false

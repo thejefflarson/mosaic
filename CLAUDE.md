@@ -101,6 +101,29 @@ xcrun notarytool store-credentials "MosaicNotarization" \
   --password "xxxx-xxxx-xxxx-xxxx"   # app-specific password from appleid.apple.com
 ```
 
+## Design decisions and ADRs
+
+ADRs live under `Docs/ADR/`. When a design choice is deliberate but **looks
+wrong to a naive reviewer** — usually because it goes against a generic
+"defense-in-depth" recommendation that an automated scanner or PR bot would
+flag — write it up as a numbered ADR and link the inline comment at the call
+site to that ADR.
+
+Triggers to write a new ADR (not exhaustive):
+
+- You're reverting a change that re-tightens a security control you previously
+  loosened on purpose (allowlist↔denylist flips, containment add/remove,
+  scheme handling, sanitiser strictness).
+- A reviewer (human or bot) would reasonably ask "why isn't this stricter?"
+  and the answer is "we picked the less strict option deliberately, and here's
+  the threat-model argument."
+- A workaround for a third-party library annotation that you've documented
+  inline in one place but is likely to come up in code review repeatedly.
+
+Link the ADR from the inline comment so the next reviewer (or scanner) follows
+the trail. `SECURITY.md`'s Threat Model section is a good index for
+security-relevant ADRs.
+
 ## Known workarounds to revisit
 
 **Xcode 26.4 test runner hang (added 2026-03-31):** `xcodebuild test` hangs for ~340 seconds with "The test runner hung before establishing connection" on Xcode 26.4 / macOS 26.4 regardless of test code. This is an Xcode 26.4 regression — CI uses Xcode 26.2 where tests run fine. Do not spend time debugging this locally; just push and let CI validate.
