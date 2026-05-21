@@ -121,7 +121,7 @@ final class InterceptingTerminalView: LocalProcessTerminalView {
     /// (U+2028/U+2029) that some shells treat as newlines. Defends against the
     /// "innocuous-looking command pastes as `rm -rf …`" class of attack
     /// (cf. iTerm2 2017, CVE-2017-2671).
-    static func sanitizeForClipboard(_ text: String) -> String {
+    nonisolated static func sanitizeForClipboard(_ text: String) -> String {
         var out = String.UnicodeScalarView()
         out.reserveCapacity(text.unicodeScalars.count)
         for s in text.unicodeScalars {
@@ -145,7 +145,7 @@ final class InterceptingTerminalView: LocalProcessTerminalView {
         return String(out)
     }
 
-    static func trimTrailingSpacesPerLine(_ text: String) -> String {
+    nonisolated static func trimTrailingSpacesPerLine(_ text: String) -> String {
         // Operate on UnicodeScalars: in the Character view, "\r\n" is a single
         // grapheme cluster, so splitting on the Character "\n" misses CRLF lines.
         text.unicodeScalars
@@ -163,7 +163,7 @@ final class InterceptingTerminalView: LocalProcessTerminalView {
 
     /// Clamp and strip control bytes from a notification field before forwarding to
     /// UNUserNotificationCenter — the payload comes from terminal output.
-    static func sanitizeNotificationText(_ s: String, max: Int) -> String {
+    nonisolated static func sanitizeNotificationText(_ s: String, max: Int) -> String {
         var out = String.UnicodeScalarView()
         out.reserveCapacity(min(s.unicodeScalars.count, max))
         var count = 0
@@ -271,18 +271,21 @@ final class InterceptingTerminalView: LocalProcessTerminalView {
         NSWorkspace.shared.open(url)
     }
 
-    /// Schemes explicitly permitted to reach NSWorkspace.open() from PTY-supplied
-    /// OSC 8 links. An allow-list is used instead of a deny-list so that newly
-    /// registered app-scheme handlers (vscode://, obsidian://, x-callback-url://,
-    /// etc.) cannot be triggered by crafted PTY output even through the
-    /// confirmation dialog — social-engineering resistance requires that unknown
-    /// schemes never reach NSWorkspace regardless of user confirmation.
+    /// Schemes that are categorically blocked even with the user-confirmation
+    /// dialog. The dialog is the primary mitigation; this deny-list provides
+    /// defence-in-depth for schemes that must never reach NSWorkspace.
+    ///
+    /// IMPORTANT — deliberate design choice (do not re-flip to an allow-list):
+    /// users legitimately click custom app schemes from terminal output
+    /// (vscode://, slack://, cursor://, zoom://, obsidian://, x-callback-url://, …).
+    /// An allow-list silently no-ops those clicks. The confirmation dialog in
+    /// requestOpenLink shows the resolved URL before NSWorkspace.open() — that
+    /// is where social-engineering resistance lives. See LinkResolutionTests
+    /// `customSchemesPassThrough`.
     /// `file://` is handled separately via path-resolution below.
-    static let allowedLinkSchemes: Set<String> = [
-        "https", "http",    // web
-        "mailto", "tel",    // standard communication
-        "ssh", "ftp",       // remote-access protocols terminal users commonly click
-        "git",              // version control
+    static let deniedLinkSchemes: Set<String> = [
+        "javascript", "data", "vbscript",   // script injection
+        "jar", "ms-its",                     // historic code-execution vectors
     ]
 
     /// Pure function so we can unit-test without an NSWorkspace side effect.
@@ -302,12 +305,12 @@ final class InterceptingTerminalView: LocalProcessTerminalView {
            let scheme = url.scheme?.lowercased() {
             if scheme == "file" {
                 // Unwrap to the underlying path and fall through so the same
-                // canonicalise + containment check applies.
+                // canonicalise + exists-check applies.
                 pathBody = url.path
-            } else if allowedLinkSchemes.contains(scheme) {
-                return url
-            } else {
+            } else if deniedLinkSchemes.contains(scheme) {
                 return nil
+            } else {
+                return url
             }
         } else if let colon = trimmed.firstIndex(of: ":"),
                   let url = URL(string: trimmed),
@@ -315,7 +318,7 @@ final class InterceptingTerminalView: LocalProcessTerminalView {
                   // Avoid mis-classifying "hello.txt:42" — scheme must look like
                   // a real scheme (letters only, no dots) for the opaque branch.
                   trimmed[..<colon].allSatisfy({ $0.isASCII && $0.isLetter }),
-                  allowedLinkSchemes.contains(scheme) {
+                  !deniedLinkSchemes.contains(scheme) {
             return url
         }
 
