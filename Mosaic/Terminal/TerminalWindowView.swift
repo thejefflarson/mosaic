@@ -312,12 +312,13 @@ final class InterceptingTerminalView: LocalProcessTerminalView {
             : (cwd as NSString).appendingPathComponent(expanded)
 
         // Canonicalise to fold out `..` segments and symlinks before exists-check.
+        // No path-containment check here by design: clicking system paths like
+        // /etc/hosts or /var/log/foo from grep output is legitimate. The PTY
+        // OSC-7-cwd + OSC-8-link redirect threat is mitigated by the user-facing
+        // confirmation dialog in requestOpenLink, which displays the resolved
+        // URL before any NSWorkspace.open() call.
         let resolved = URL(fileURLWithPath: joined)
             .resolvingSymlinksInPath().standardizedFileURL.path
-        // Restrict to user's home subtree — cwd is PTY-controlled via OSC 7 and could
-        // otherwise redirect opens to arbitrary paths on disk after symlink resolution.
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        guard resolved == home || resolved.hasPrefix(home + "/") else { return nil }
         var isDir: ObjCBool = false
         guard FileManager.default.fileExists(atPath: resolved, isDirectory: &isDir) else { return nil }
         return URL(fileURLWithPath: resolved, isDirectory: isDir.boolValue)
