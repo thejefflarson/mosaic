@@ -61,7 +61,15 @@ final class InterceptingTerminalView: LocalProcessTerminalView {
                 // Block intermediate-byte sequences (e.g. DECSTR ESC[!p).
                 if b2 >= 0x20 && b2 <= 0x2F { return false }
                 // Block CPR (cursor position report ESC[row;colR) — terminal-generated.
-                if data[data.index(before: data.endIndex)] == 0x52 { return false }
+                // Verify that last byte is 'R' AND all intermediate bytes are ASCII
+                // digits or ';' to avoid suppressing unrelated CSI sequences that
+                // happen to end in 0x52 (e.g. DECRQSS responses with arbitrary data).
+                if data[data.index(before: data.endIndex)] == 0x52 {
+                    let inner = data[(data.startIndex + 2) ..< data.index(before: data.endIndex)]
+                    if inner.allSatisfy({ ($0 >= 0x30 && $0 <= 0x39) || $0 == 0x3B }) {
+                        return false
+                    }
+                }
             default: break
             }
         } else if b0 >= 0x90 && b0 <= 0x9F {           // 8-bit C1 (DCS … APC)
@@ -193,7 +201,15 @@ final class InterceptingTerminalView: LocalProcessTerminalView {
         case "B": return .commandStart
         case "D":
             let parts = text.split(separator: ";", maxSplits: 1)
-            let exit = parts.count > 1 ? Int(parts[1]) : nil
+            let exit: Int?
+            if parts.count > 1, let raw = Int(parts[1]) {
+                // Clamp to valid POSIX exit-code range (0–255) so an
+                // out-of-range PTY-supplied value cannot propagate to UI
+                // arithmetic downstream.
+                exit = (0...255).contains(raw) ? raw : nil
+            } else {
+                exit = nil
+            }
             return .commandFinished(exitCode: exit)
         default: return nil
         }
@@ -255,14 +271,18 @@ final class InterceptingTerminalView: LocalProcessTerminalView {
         NSWorkspace.shared.open(url)
     }
 
-    /// Schemes that are categorically blocked regardless of the user confirmation
-    /// dialog in requestOpenLink. The confirmation dialog is the primary mitigation
-    /// for untrusted link opens; this deny-list provides defence-in-depth for schemes
-    /// that must never reach NSWorkspace under any circumstances.
-    /// `file://` is handled separately via path-containment checks below.
-    static let deniedLinkSchemes: Set<String> = [
-        "javascript", "data", "vbscript",   // script injection
-        "jar", "ms-its",                     // historic code-execution vectors
+    /// Schemes explicitly permitted to reach NSWorkspace.open() from PTY-supplied
+    /// OSC 8 links. An allow-list is used instead of a deny-list so that newly
+    /// registered app-scheme handlers (vscode://, obsidian://, x-callback-url://,
+    /// etc.) cannot be triggered by crafted PTY output even through the
+    /// confirmation dialog — social-engineering resistance requires that unknown
+    /// schemes never reach NSWorkspace regardless of user confirmation.
+    /// `file://` is handled separately via path-resolution below.
+    static let allowedLinkSchemes: Set<String> = [
+        "https", "http",    // web
+        "mailto", "tel",    // standard communication
+        "ssh", "ftp",       // remote-access protocols terminal users commonly click
+        "git",              // version control
     ]
 
     /// Pure function so we can unit-test without an NSWorkspace side effect.
@@ -284,10 +304,10 @@ final class InterceptingTerminalView: LocalProcessTerminalView {
                 // Unwrap to the underlying path and fall through so the same
                 // canonicalise + containment check applies.
                 pathBody = url.path
-            } else if deniedLinkSchemes.contains(scheme) {
-                return nil
-            } else {
+            } else if allowedLinkSchemes.contains(scheme) {
                 return url
+            } else {
+                return nil
             }
         } else if let colon = trimmed.firstIndex(of: ":"),
                   let url = URL(string: trimmed),
@@ -295,7 +315,7 @@ final class InterceptingTerminalView: LocalProcessTerminalView {
                   // Avoid mis-classifying "hello.txt:42" — scheme must look like
                   // a real scheme (letters only, no dots) for the opaque branch.
                   trimmed[..<colon].allSatisfy({ $0.isASCII && $0.isLetter }),
-                  !deniedLinkSchemes.contains(scheme) {
+                  allowedLinkSchemes.contains(scheme) {
             return url
         }
 
@@ -690,6 +710,11 @@ final class TerminalWindowView: NSView {
         // Override via parser handler. Cap payload size and sanitize control bytes
         // (terminal output is untrusted; an unbounded OSC payload would allocate
         // a huge String on MainActor and forward it to UNUserNotificationCenter).
+        //
+        // Architectural note: SwiftTerm buffers the entire OSC payload before
+        // calling this handler, so a crafted PTY stream can still cause a large
+        // heap allocation before our cap takes effect. Fixing this requires a
+        // SwiftTerm-level change to truncate OSC sequences during parsing.
         terminal.parser.oscHandlers[777] = { [weak self] data in
             guard data.count <= 8192 else { return }
             let text = String(bytes: data, encoding: .utf8) ?? ""
@@ -956,6 +981,19 @@ final class TerminalWindowView: NSView {
         applyTerminalSettings(settings)
 
         var env = ProcessInfo.processInfo.environment
+        // Strip variables that commonly hold credentials from Mosaic's own
+        // process environment (e.g. API keys injected by CI runners or
+        // launch-agent wrappers) so they don't leak into spawned shells.
+        // Standard shell variables (PATH, HOME, USER, SHELL, LANG, …) are
+        // unaffected. Suffix matching is case-insensitive to catch mixed-case
+        // naming conventions.
+        let credentialSuffixes = ["_TOKEN", "_SECRET", "_API_KEY", "_PASSWORD", "_PASS", "_CREDENTIAL"]
+        for key in env.keys {
+            let upper = key.uppercased()
+            if credentialSuffixes.contains(where: { upper.hasSuffix($0) }) {
+                env.removeValue(forKey: key)
+            }
+        }
         env["TERM"] = "xterm-256color"
         env["COLORTERM"] = "truecolor"
 
@@ -1002,8 +1040,13 @@ final class TerminalWindowView: NSView {
             }
         }
 
-        // Apply theme and optionally restore scrollback after shell init sequences have run.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+        // Apply theme and optionally restore scrollback after shell init sequences
+        // have run. The 2 s delay is a heuristic; if the shell takes longer to
+        // initialize, restored scrollback may still interleave with startup output.
+        // A more robust fix would hook OSC 133 A (prompt-start) to trigger
+        // restoration, but that requires shells to emit OSC 133 support — not
+        // universal enough to rely on as the sole mechanism.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
             guard let self else { return }
             self.applyTheme(self.theme)
             if let raw = self.restoredScrollback, !raw.isEmpty {
@@ -1286,13 +1329,18 @@ extension TerminalWindowView: LocalProcessTerminalViewDelegate {
         guard !path.isEmpty, !path.contains("\0") else { return }
         // Restrict to home subtree so a crafted OSC 7 cannot give currentCwd full
         // filesystem reach and redirect subsequent OSC 8 link opens outside ~/…
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        guard path == home || path.hasPrefix(home + "/") else { return }
+        // Resolve symlinks in both paths before comparing so a symlink inside home
+        // that points outside (possible on case-insensitive APFS) cannot bypass
+        // the containment check via hasPrefix on the un-resolved strings.
+        let resolvedPath = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
+        let home = URL(fileURLWithPath: FileManager.default.homeDirectoryForCurrentUser.path)
+            .resolvingSymlinksInPath().path
+        guard resolvedPath == home || resolvedPath.hasPrefix(home + "/") else { return }
         var isDir: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: path, isDirectory: &isDir),
+        guard FileManager.default.fileExists(atPath: resolvedPath, isDirectory: &isDir),
               isDir.boolValue else { return }
         Task { @MainActor [weak self] in
-            self?.currentCwd = path
+            self?.currentCwd = resolvedPath
         }
     }
 
