@@ -2,6 +2,13 @@ import AppKit
 import os
 @preconcurrency import SwiftTerm
 
+/// Structured log for security-relevant events in the terminal layer.
+/// Auditable via Console.app (subsystem filter: bundle ID, category: "security").
+private let securityLog = Logger(
+    subsystem: Bundle.main.bundleIdentifier ?? "com.mosaic.CanvasTerm",
+    category: "security"
+)
+
 /// Thin subclass that intercepts outgoing key data for broadcast mode
 /// while still calling super to let the PTY receive input normally.
 final class InterceptingTerminalView: LocalProcessTerminalView {
@@ -100,6 +107,13 @@ final class InterceptingTerminalView: LocalProcessTerminalView {
 
     var onBell: (() -> Void)?
 
+    /// Rolling-window counter limiting OSC 8 link-open confirmation dialogs to
+    /// ≤ 5 per minute. A hostile PTY can emit arbitrary OSC 8 sequences; without
+    /// a cap each one forces a modal NSAlert on the main thread, enabling alert
+    /// fatigue and a main-thread denial-of-service.
+    private var linkOpenCount = 0
+    private var linkOpenWindowStart: Double = -.infinity
+
     /// Trim trailing whitespace from each copied line. SwiftTerm includes empty
     /// cells (padded with spaces) past the last printed character on each row,
     /// which is almost never what the user wants on the clipboard.
@@ -121,10 +135,19 @@ final class InterceptingTerminalView: LocalProcessTerminalView {
     /// (U+2028/U+2029) that some shells treat as newlines. Defends against the
     /// "innocuous-looking command pastes as `rm -rf …`" class of attack
     /// (cf. iTerm2 2017, CVE-2017-2671).
+    ///
+    /// NFKC normalisation is applied first to collapse full-width ASCII forms
+    /// (ａ→a, ０→0, …) and other compatibility variants that could otherwise
+    /// encode visually-identical-but-different shell commands (homoglyph attack).
+    /// Note: cross-script confusables (e.g. Cyrillic а vs Latin a) are not
+    /// eliminated by NFKC; they require an external confusable database.
     nonisolated static func sanitizeForClipboard(_ text: String) -> String {
+        // NFKC: decomposes compatibility characters then recomposes canonically,
+        // mapping full-width/half-width variants to standard ASCII equivalents.
+        let normalized = (text as NSString).precomposedStringWithCompatibilityMapping
         var out = String.UnicodeScalarView()
-        out.reserveCapacity(text.unicodeScalars.count)
-        for s in text.unicodeScalars {
+        out.reserveCapacity(normalized.unicodeScalars.count)
+        for s in normalized.unicodeScalars {
             switch s.value {
             case 0x00...0x08, 0x0B...0x0C, 0x0E...0x1F,      // C0 controls (keep \t \n \r)
                  0x7F,                                         // DEL
@@ -163,6 +186,8 @@ final class InterceptingTerminalView: LocalProcessTerminalView {
 
     /// Clamp and strip control bytes from a notification field before forwarding to
     /// UNUserNotificationCenter — the payload comes from terminal output.
+    /// Also strips bidi override/isolate codepoints and zero-width characters to
+    /// prevent spoofed notification text (e.g. RLO-based direction reversal).
     nonisolated static func sanitizeNotificationText(_ s: String, max: Int) -> String {
         var out = String.UnicodeScalarView()
         out.reserveCapacity(min(s.unicodeScalars.count, max))
@@ -171,6 +196,10 @@ final class InterceptingTerminalView: LocalProcessTerminalView {
             let v = scalar.value
             if v < 0x20 && v != 0x0A { continue }              // strip C0 except newline
             if v >= 0x80 && v <= 0x9F { continue }             // strip 8-bit C1
+            // Strip bidi overrides/isolates — prevents RLO spoofing in notification banners.
+            if (v >= 0x202A && v <= 0x202E) || (v >= 0x2066 && v <= 0x2069) { continue }
+            // Strip zero-width chars — prevents invisible payload smuggling.
+            if (v >= 0x200B && v <= 0x200D) || v == 0x2060 || v == 0xFEFF { continue }
             out.append(scalar)
             count += 1
         }
@@ -206,7 +235,20 @@ final class InterceptingTerminalView: LocalProcessTerminalView {
                 // Clamp to valid POSIX exit-code range (0–255) so an
                 // out-of-range PTY-supplied value cannot propagate to UI
                 // arithmetic downstream.
-                exit = (0...255).contains(raw) ? raw : nil
+                if (0...255).contains(raw) {
+                    exit = raw
+                } else {
+                    // An integer outside 0–255 is not a valid POSIX exit code.
+                    // Log it: differentiates a crafted out-of-range payload from a
+                    // legitimately absent exit code (both otherwise yield exit=nil).
+                    securityLog.warning("OSC 133 D: PTY exit code \(raw, privacy: .public) out of POSIX range 0–255; treating as unknown")
+                    exit = nil
+                }
+            } else if parts.count > 1 {
+                // A non-integer D;<value> payload is malformed; log it so
+                // spoofing attempts are distinguishable from a missing exit code.
+                securityLog.warning("OSC 133 D: malformed exit code '\(String(parts[1]).prefix(32), privacy: .public)'; treating as unknown")
+                exit = nil
             } else {
                 exit = nil
             }
@@ -256,6 +298,21 @@ final class InterceptingTerminalView: LocalProcessTerminalView {
         let cwd = enclosingTerminalWindowView?.currentCwd
             ?? FileManager.default.homeDirectoryForCurrentUser.path
         guard let url = Self.resolveOpenableURL(for: link, cwd: cwd) else { return }
+
+        // Rate-limit OSC 8 link-open confirmation dialogs to ≤ 5 per minute.
+        // A hostile PTY can emit unbounded OSC 8 sequences; without a cap, each
+        // one blocks the main thread with a modal NSAlert (DoS + alert fatigue).
+        let now = ProcessInfo.processInfo.systemUptime
+        if now - linkOpenWindowStart >= 60 {
+            linkOpenCount = 0
+            linkOpenWindowStart = now
+        }
+        guard linkOpenCount < 5 else {
+            securityLog.warning("link-open rate-limit reached; dropping PTY-requested open of \(url.absoluteString, privacy: .private)")
+            return
+        }
+        linkOpenCount += 1
+
         // Always confirm before opening PTY-supplied links. Terminal output is untrusted;
         // a crafted OSC 8 payload could target local files or app-registered URL schemes.
         let alert = NSAlert()
@@ -267,7 +324,23 @@ final class InterceptingTerminalView: LocalProcessTerminalView {
         alert.alertStyle = .informational
         alert.addButton(withTitle: "Open")
         alert.addButton(withTitle: "Cancel")
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        guard alert.runModal() == .alertFirstButtonReturn else {
+            securityLog.info("link-open cancelled by user: \(url.absoluteString, privacy: .private)")
+            return
+        }
+
+        // Re-check existence just before opening to narrow the TOCTOU window
+        // between resolveOpenableURL (called before the dialog was shown) and
+        // the NSWorkspace.open() call. During a long confirmation dialog a
+        // concurrent process could atomically replace a file or symlink target.
+        if url.isFileURL {
+            guard FileManager.default.fileExists(atPath: url.path) else {
+                securityLog.warning("link-open aborted: file no longer exists at \(url.path, privacy: .private)")
+                return
+            }
+        }
+
+        securityLog.info("link-open confirmed by user: \(url.absoluteString, privacy: .private)")
         NSWorkspace.shared.open(url)
     }
 
@@ -305,6 +378,7 @@ final class InterceptingTerminalView: LocalProcessTerminalView {
                 // canonicalise + exists-check applies.
                 pathBody = url.path
             } else if deniedLinkSchemes.contains(scheme) {
+                securityLog.warning("link-open blocked: PTY requested denied scheme '\(scheme, privacy: .public)'")
                 return nil
             } else {
                 return url
@@ -738,6 +812,12 @@ final class TerminalWindowView: NSView {
         // OSC 133 D — command finished. Only wire this marker; busy indicators
         // on B/C are a bad idea for TUIs (claude/vim) which never emit D until exit,
         // leaving the whole app pulsing.
+        //
+        // Architectural note: SwiftTerm buffers the entire OSC payload before
+        // calling this handler, so a crafted PTY stream can still cause a large
+        // heap allocation before our 8192-byte cap takes effect. Fixing this
+        // requires a SwiftTerm-level change to truncate OSC sequences during
+        // parsing (same limitation as the OSC 777 handler above).
         terminal.parser.oscHandlers[133] = { [weak self] data in
             guard data.count <= 8192 else { return }
             let text = String(bytes: data, encoding: .utf8) ?? ""
@@ -985,10 +1065,23 @@ final class TerminalWindowView: NSView {
         // Standard shell variables (PATH, HOME, USER, SHELL, LANG, …) are
         // unaffected. Suffix matching is case-insensitive to catch mixed-case
         // naming conventions.
-        let credentialSuffixes = ["_TOKEN", "_SECRET", "_API_KEY", "_PASSWORD", "_PASS", "_CREDENTIAL"]
+        // Suffix-based stripping (case-insensitive).
+        // "_KEY"    catches OPENAI_KEY, ANTHROPIC_KEY, PRIVATE_KEY, etc.
+        // "_AUTH"   catches GH_AUTH, GITHUB_AUTH, etc.
+        // "_KEY_ID" catches AWS_ACCESS_KEY_ID, etc.
+        let credentialSuffixes = [
+            "_TOKEN", "_SECRET", "_API_KEY", "_PASSWORD", "_PASS", "_CREDENTIAL",
+            "_KEY", "_AUTH", "_KEY_ID",
+        ]
+        // Exact-name matching for well-known credential vars whose names don't
+        // follow a suffix pattern (e.g. DATABASE_URL, where "_URL" alone is too broad).
+        let exactCredentialNames: Set<String> = [
+            "DATABASE_URL",   // common 12-factor DB connection strings
+        ]
         for key in env.keys {
             let upper = key.uppercased()
-            if credentialSuffixes.contains(where: { upper.hasSuffix($0) }) {
+            if credentialSuffixes.contains(where: { upper.hasSuffix($0) })
+                || exactCredentialNames.contains(upper) {
                 env.removeValue(forKey: key)
             }
         }
@@ -1318,6 +1411,14 @@ extension TerminalWindowView: LocalProcessTerminalViewDelegate {
 
     nonisolated func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {
         guard let dir = directory else { return }
+        // Reject oversized OSC 7 payloads before any URL parsing or filesystem work.
+        // A crafted multi-megabyte payload would cause unbounded heap allocation
+        // inside URL(string:) and potentially expensive subsequent fs calls.
+        // 4096 bytes is generous for any real working directory path.
+        guard dir.utf8.count <= 4096 else {
+            securityLog.warning("OSC 7 cwd payload exceeds 4096 bytes (\(dir.utf8.count, privacy: .public)); ignoring")
+            return
+        }
         // SwiftTerm passes a file:// URL; extract the plain POSIX path.
         let path = URL(string: dir)?.path ?? dir
         // Validate before storing. An adversarial PTY could emit crafted OSC 7 payloads
