@@ -791,8 +791,14 @@ final class TerminalWindowView: NSView {
             guard data.count <= 8192 else { return }
             let text = String(bytes: data, encoding: .utf8) ?? ""
             guard let parsed = InterceptingTerminalView.parseOSC777(text) else { return }
-            let title = InterceptingTerminalView.sanitizeNotificationText(parsed.title, max: 128)
-            let body  = InterceptingTerminalView.sanitizeNotificationText(parsed.body,  max: 512)
+            // Chain sanitizeForClipboard before sanitizeNotificationText to also
+            // strip bidi overrides (U+202A–U+202E, U+2066–U+2069), zero-width
+            // chars, and U+2028/U+2029. setTerminalTitle uses the same chain;
+            // OSC 777 forwards to UNUserNotificationCenter and should match.
+            let title = InterceptingTerminalView.sanitizeNotificationText(
+                InterceptingTerminalView.sanitizeForClipboard(parsed.title), max: 128)
+            let body = InterceptingTerminalView.sanitizeNotificationText(
+                InterceptingTerminalView.sanitizeForClipboard(parsed.body),  max: 512)
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 // Rate-limit: drop notifications exceeding 10 per minute to prevent

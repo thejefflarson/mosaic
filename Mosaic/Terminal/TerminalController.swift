@@ -11,6 +11,11 @@ final class TerminalController {
     /// workspace.json with thousands of WindowSnapshot entries would otherwise
     /// fork-bomb the app at launch.
     static let maxRestoredWindows = 64
+    /// Hard ceiling on simultaneously-live terminals. Bounds interactive,
+    /// AppleScript-driven, and undo-driven spawns alike — without this, a
+    /// peer process with Automation TCC consent could fork-bomb the user via
+    /// repeated `spawn at` calls.
+    static let maxLiveWindows = 128
 
     /// Map a requested shell path to the executable we'll actually spawn. Returns
     /// the canonicalised path if it appears in `allowedShells`; otherwise falls
@@ -124,6 +129,16 @@ final class TerminalController {
                         cwd: String? = nil,
                         scrollback: String? = nil) {
         guard let cv = canvasView else { return }
+
+        // Cap live terminals. Bounds interactive / AppleScript / undo paths
+        // uniformly. Returns silently on overflow — the cap is a safety net
+        // and a foreground attacker driving spawns shouldn't be able to spam
+        // dialogs either.
+        guard manager.windows.count < Self.maxLiveWindows else {
+            NSLog("[TerminalController] live window cap (%d) reached; refusing spawn",
+                  Self.maxLiveWindows)
+            return
+        }
 
         // Restrict shell paths to an allowlist derived from /etc/shells (+ $SHELL +
         // built-in defaults). isExecutableFile alone accepted any +x file on disk,
@@ -364,7 +379,10 @@ final class TerminalController {
     // MARK: - Snapshot / Restore
 
     func makeSnapshots() -> [WorkspaceSnapshot.WindowSnapshot] {
-        manager.windows.map { w in
+        // Scrollback frequently contains secrets pasted/typed by the user
+        // (.env, AWS keys, gh-auth tokens). Persisting is opt-in.
+        let captureScrollback = TerminalSettings.shared.persistScrollback
+        return manager.windows.map { w in
             WorkspaceSnapshot.WindowSnapshot(
                 id: w.id,
                 x: w.frame.origin.x,
@@ -374,7 +392,7 @@ final class TerminalController {
                 shell: w.shell,
                 cwd: w.currentCwd,
                 title: w.currentTitle,
-                scrollback: w.extractScrollbackText()
+                scrollback: captureScrollback ? w.extractScrollbackText() : nil
             )
         }
     }

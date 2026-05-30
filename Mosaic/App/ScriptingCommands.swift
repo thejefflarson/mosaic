@@ -52,7 +52,31 @@ final class FocusTerminalCommand: NSScriptCommand {
 
 @objc(OpenTerminalCommand)
 final class OpenTerminalCommand: NSScriptCommand {
+    /// Rolling-window rate limit: any peer with Automation TCC consent could
+    /// otherwise drive `spawn at` in a tight loop. Combined with the
+    /// in-process live-window cap in TerminalController, this bounds the
+    /// AppleScript-facing fork-bomb surface.
+    private nonisolated(unsafe) static var spawnWindowStart: TimeInterval = 0
+    private nonisolated(unsafe) static var spawnsInWindow: Int = 0
+    private static let lock = NSLock()
+    private static let maxSpawnsPerMinute = 10
+
     override func performDefaultImplementation() -> Any? {
+        let now = ProcessInfo.processInfo.systemUptime
+        let allowed: Bool = Self.lock.withLock {
+            if now - Self.spawnWindowStart >= 60 {
+                Self.spawnsInWindow = 0
+                Self.spawnWindowStart = now
+            }
+            guard Self.spawnsInWindow < Self.maxSpawnsPerMinute else { return false }
+            Self.spawnsInWindow += 1
+            return true
+        }
+        guard allowed else {
+            scriptErrorNumber = errAEEventNotHandled
+            scriptErrorString = "spawn rate limit exceeded (max \(Self.maxSpawnsPerMinute) per minute)"
+            return nil
+        }
         let path = (evaluatedArguments?["MsAt"] as? String).flatMap { ScriptingCwd.validate($0) }
         MainActor.assumeIsolated {
             (NSApp.delegate as? AppDelegate)?.canvasViewController?

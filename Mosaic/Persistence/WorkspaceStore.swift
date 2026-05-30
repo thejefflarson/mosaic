@@ -13,6 +13,13 @@ final class WorkspaceStore: Sendable {
         storeURL = directory.appendingPathComponent("workspace.json")
         imagesDirectory = directory.appendingPathComponent("Images", isDirectory: true)
         try? FileManager.default.createDirectory(at: imagesDirectory, withIntermediateDirectories: true)
+        // Restrict Images/ to 0700 — pasted screenshots and dropped image
+        // annotations may contain sensitive content (terminal screenshots,
+        // diagrams revealing internal infrastructure). Matches workspace.json's
+        // 0600 treatment for at-rest exposure in Time Machine / iCloud Drive
+        // / `tar` of home dir scenarios.
+        try? FileManager.default.setAttributes([.posixPermissions: 0o700],
+                                                ofItemAtPath: imagesDirectory.path)
     }
 
     private convenience init() {
@@ -58,6 +65,13 @@ final class WorkspaceStore: Sendable {
         let path = storeURL.path
         var st = stat()
         guard lstat(path, &st) == 0 else { return nil }
+        // Refuse symlinks outright — lstat reports the link's own size (well
+        // under maxSnapshotBytes), so a symlink-to-huge-file would bypass the
+        // size cap and beachball the main thread at launch.
+        guard (st.st_mode & S_IFMT) != S_IFLNK else {
+            backupBadSnapshot(reason: "symlink")
+            return nil
+        }
         guard st.st_size <= Self.maxSnapshotBytes else {
             backupBadSnapshot(reason: "size>\(Self.maxSnapshotBytes)")
             return nil

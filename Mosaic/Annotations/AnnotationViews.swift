@@ -1,4 +1,5 @@
 import AppKit
+import ImageIO
 
 // MARK: - Base class
 
@@ -624,16 +625,47 @@ final class ImageAnnotationView: AnnotationView {
     init?(at worldPt: CGPoint, url: URL) {
         let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
         if let size = attrs?[.size] as? NSNumber, size.intValue > Self.maxImageBytes { return nil }
-        guard let image = NSImage(contentsOf: url), image.isValid else { return nil }
-        let s = image.size
-        guard s.width <= Self.maxImageDimension, s.height <= Self.maxImageDimension else { return nil }
-        let ar = (s.width > 0 && s.height > 0) ? s.width / s.height : 1
-        let scale = min(1, min(400 / max(1, s.width), 300 / max(1, s.height)))
-        let size = CGSize(width: s.width * scale, height: s.height * scale)
+        // Decode via CGImageSource + thumbnail-at-index so the post-decode pixel
+        // buffer is bounded regardless of the file's declared dimensions. NSImage
+        // routes through ImageIO too, but it decodes the full buffer; using the
+        // thumbnail API caps the decoded memory at maxImageDimension squared.
+        // ImageIO has a history of TIFF/HEIC/WebP parser bugs (CVE-2022-32785,
+        // CVE-2023-41064 …) — limiting decoded size shrinks the attack surface.
+        guard let (image, sourceSize) = Self.decodeBounded(url: url) else { return nil }
+        let ar = (sourceSize.width > 0 && sourceSize.height > 0) ? sourceSize.width / sourceSize.height : 1
+        let scale = min(1, min(400 / max(1, sourceSize.width), 300 / max(1, sourceSize.height)))
+        let size = CGSize(width: sourceSize.width * scale, height: sourceSize.height * scale)
         aspectRatio = ar
         super.init(frame: CGRect(origin: worldPt, size: size))
         setup(image: image)
         savedImagePath = Self.copyFile(url, id: annotationID)
+    }
+
+    /// Decode `url` to an NSImage whose pixel buffer is bounded by
+    /// `maxImageDimension`. Returns the decoded NSImage plus the source's
+    /// declared logical size (used for aspect-ratio + initial frame).
+    private static func decodeBounded(url: URL) -> (image: NSImage, sourceSize: CGSize)? {
+        let opts: [CFString: Any] = [
+            kCGImageSourceShouldCache: false,
+        ]
+        guard let src = CGImageSourceCreateWithURL(url as CFURL, opts as CFDictionary),
+              let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any] else {
+            return nil
+        }
+        let w = (props[kCGImagePropertyPixelWidth] as? CGFloat) ?? 0
+        let h = (props[kCGImagePropertyPixelHeight] as? CGFloat) ?? 0
+        guard w > 0, h > 0, w <= maxImageDimension, h <= maxImageDimension else { return nil }
+        let thumbOpts: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceThumbnailMaxPixelSize: Int(maxImageDimension),
+        ]
+        guard let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, thumbOpts as CFDictionary) else {
+            return nil
+        }
+        return (NSImage(cgImage: cg, size: CGSize(width: w, height: h)),
+                CGSize(width: w, height: h))
     }
 
     /// Fallback initializer for cases where only a rendered NSImage is available
@@ -756,23 +788,40 @@ final class ImageAnnotationView: AnnotationView {
     }
 
     /// Copy the source file into the Images directory, preserving its extension.
+    /// Returns nil on failure so callers don't record a dangling savedImagePath
+    /// into workspace.json (which would silently break the annotation at restore).
     private static func copyFile(_ source: URL, id: UUID) -> String? {
         let ext = source.pathExtension.isEmpty ? "png" : source.pathExtension
         let dest = WorkspaceStore.shared.imagesDirectory
             .appendingPathComponent("\(id.uuidString).\(ext)")
-        try? FileManager.default.copyItem(at: source, to: dest)
-        return dest.path
+        do {
+            try FileManager.default.copyItem(at: source, to: dest)
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: 0o600], ofItemAtPath: dest.path)
+            return dest.path
+        } catch {
+            NSLog("[ImageAnnotation] copyFile failed: %@", "\(error)")
+            return nil
+        }
     }
 
     /// Encode an NSImage to PNG and write it to the Images directory.
+    /// Returns nil on encode/write failure.
     private static func persistAsPNG(_ image: NSImage, id: UUID) -> String? {
         let url = WorkspaceStore.shared.imagesDirectory
             .appendingPathComponent("\(id.uuidString).png")
         guard let tiff = image.tiffRepresentation,
               let bitmap = NSBitmapImageRep(data: tiff),
               let png = bitmap.representation(using: .png, properties: [:]) else { return nil }
-        try? png.write(to: url)
-        return url.path
+        do {
+            try png.write(to: url)
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: 0o600], ofItemAtPath: url.path)
+            return url.path
+        } catch {
+            NSLog("[ImageAnnotation] persistAsPNG failed: %@", "\(error)")
+            return nil
+        }
     }
 
     override func toSnapshot() -> AnnotationSnapshot? {

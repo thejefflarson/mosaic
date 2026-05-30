@@ -1,15 +1,25 @@
 name: Dependabot Auto-merge
 on:
   pull_request
+
+# Default to read-only at the workflow level so future jobs don't inherit
+# write scope by accident; the auto-merge job opts in to write below.
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
+
 jobs:
   auto-merge:
     runs-on: ubuntu-latest
     if: github.actor == 'dependabot[bot]'
+    permissions:
+      contents: write
+      pull-requests: write
     steps:
       # Read Dependabot's metadata so we can gate on update-type / ecosystem.
+      # TODO(security): pin to a full commit SHA matching the convention in
+      # test.yml / soundcheck.yml (e.g. `dependabot/fetch-metadata@<sha>`).
+      # A floating major tag could be repointed and would run with this job's
+      # write-scope token.
       - name: Fetch metadata
         id: meta
         uses: dependabot/fetch-metadata@v2

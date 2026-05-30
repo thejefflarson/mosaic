@@ -21,6 +21,12 @@ struct TerminalSettings: Codable {
     var panOnBell: Bool = false
     /// Flash the terminal border on bell / notification.
     var flashOnBell: Bool = true
+    /// Persist scrollback into workspace.json so it can be replayed on next
+    /// launch. Off by default: scrollback frequently contains pasted secrets
+    /// (.env exports, AWS keys, `gh auth login` tokens) and workspace.json
+    /// leaks through Time Machine / iCloud Drive of Application Support /
+    /// `tar` of the home directory.
+    var persistScrollback: Bool = false
 
     init() {}
 
@@ -43,6 +49,7 @@ struct TerminalSettings: Codable {
         self.useBrightColors        = try c.decodeIfPresent(Bool.self,             forKey: .useBrightColors)        ?? self.useBrightColors
         self.panOnBell              = try c.decodeIfPresent(Bool.self,             forKey: .panOnBell)              ?? self.panOnBell
         self.flashOnBell            = try c.decodeIfPresent(Bool.self,             forKey: .flashOnBell)            ?? self.flashOnBell
+        self.persistScrollback      = try c.decodeIfPresent(Bool.self,             forKey: .persistScrollback)      ?? self.persistScrollback
     }
 
     // MARK: - Persistence
