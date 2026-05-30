@@ -222,19 +222,25 @@ xcrun stapler staple "$DMG"
 echo "→ signing DMG for Sparkle"
 # Narrow the find pattern to the SPM-resolved artifact directory (more
 # specific than the previous `*/sparkle/Sparkle/bin/*`) so an arbitrary
-# DerivedData drop-in is less likely to win. Refuse to pick a match if
-# more than one candidate exists.
+# DerivedData drop-in is less likely to win. Multiple candidates are normal
+# (one per Xcode project that depends on Sparkle); they should be byte-
+# identical. Dedup by SHA256 and only refuse when the binaries genuinely
+# differ — that mismatch is the actual tamper signal.
 SIGN_UPDATE=$(command -v sign_update 2>/dev/null || true)
 if [[ -z "$SIGN_UPDATE" ]]; then
     CANDIDATES=$(find ~/Library/Developer/Xcode/DerivedData \
         -path "*/SourcePackages/artifacts/sparkle/Sparkle/bin/sign_update" \
         2>/dev/null)
-    if [[ $(printf '%s\n' "$CANDIDATES" | wc -l) -gt 1 ]]; then
-        echo "error: multiple sign_update candidates in DerivedData — refusing to pick one:"
-        printf '  %s\n' $CANDIDATES
-        exit 1
+    if [[ -n "$CANDIDATES" ]]; then
+        DISTINCT_HASHES=$(printf '%s\n' "$CANDIDATES" \
+            | xargs shasum -a 256 2>/dev/null | awk '{print $1}' | sort -u | wc -l | tr -d ' ')
+        if [[ "$DISTINCT_HASHES" -gt 1 ]]; then
+            echo "error: sign_update candidates differ across DerivedData — refusing to pick one:"
+            printf '%s\n' "$CANDIDATES" | xargs shasum -a 256 2>/dev/null | sed 's/^/  /'
+            exit 1
+        fi
+        SIGN_UPDATE=$(printf '%s' "$CANDIDATES" | head -1)
     fi
-    SIGN_UPDATE=$(printf '%s' "$CANDIDATES" | head -1)
 fi
 
 # Sparkle's SPM artifact ships sign_update ad-hoc signed (no Developer ID
