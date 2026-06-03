@@ -343,9 +343,13 @@ $COMMIT_LOG_SAFE
     NOTES=$(printf '%s' "$PROMPT" | claude -p 2>/dev/null) || true
     # Cap generated notes to 8 KiB — a prompt-injection success or model
     # regression won't dump arbitrary text into the public release page.
+    # NOTE: do NOT add --draft here. The appcast advertising this release is
+    # pushed to main below, and a draft release does not serve its assets at
+    # the public releases/download/<tag>/<asset> URL — so Sparkle clients would
+    # 404 on the enclosure until the release is manually published. (This bug
+    # shipped in v0.9.1.)
     if [[ -n "${NOTES:-}" && ${#NOTES} -le 8192 ]]; then
-        # --draft so the maintainer reviews generated notes before publishing.
-        RELEASE_NOTES_ARGS=(--draft --notes "$NOTES")
+        RELEASE_NOTES_ARGS=(--notes "$NOTES")
     fi
 fi
 
@@ -362,5 +366,20 @@ echo "→ creating GitHub release"
 gh release create "$VERSION" "$DMG" \
     --title "$APP_NAME $VERSION" \
     "${RELEASE_NOTES_ARGS[@]}"
+
+# Verify the enclosure URL the appcast advertises actually resolves. The
+# appcast was already pushed to main, so a non-downloadable asset here means
+# every Sparkle client will 404 in the update menu — fail loudly so it's
+# caught now, not by users.
+if [[ -n "${DOWNLOAD_URL:-}" ]]; then
+    echo "→ verifying $DOWNLOAD_URL is downloadable"
+    HTTP_CODE=$(curl -sS -o /dev/null -w "%{http_code}" -L "$DOWNLOAD_URL" || echo "000")
+    if [[ "$HTTP_CODE" != "200" ]]; then
+        echo "error: enclosure URL returned HTTP $HTTP_CODE — the appcast (already on main)"
+        echo "  advertises an asset Sparkle cannot download. Ensure the release is PUBLISHED"
+        echo "  (not a draft) and the DMG asset is attached."
+        exit 1
+    fi
+fi
 
 echo "done — $APP_NAME $VERSION released"
