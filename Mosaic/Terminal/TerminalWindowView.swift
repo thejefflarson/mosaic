@@ -613,6 +613,49 @@ final class TerminalWindowView: NSView {
             return event
         }
 
+        // TUI mouse wheel: when the app under the pointer has enabled mouse
+        // tracking (vim, htop, tmux, less, …), translate the wheel into a mouse
+        // report and send it to the PTY. SwiftTerm's own scrollWheel only scrolls
+        // its local buffer — a no-op on an alt-screen TUI — and never emits wheel
+        // reports, so without this the TUI sees nothing. Consuming the event
+        // (return nil) stops SwiftTerm and the canvas from also acting on it.
+        // We can't override scrollWheel (SwiftTerm declares it public, not open).
+        NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { event in
+            guard event.scrollingDeltaY != 0,
+                  let tv = terminalUnderPointer(for: event) else { return event }
+            let t = tv.getTerminal()
+            guard tv.allowMouseReporting, t.mouseMode != .off else { return event }
+            let local = tv.convert(event.locationInWindow, from: nil)
+            guard let cell = cellAt(local: local, termView: tv) else { return event }
+            let f = event.modifierFlags
+            // Wheel up = button 4, wheel down = button 5. Match SwiftTerm's
+            // local-scroll sense (positive deltaY → toward older content → up).
+            let cb = t.encodeButton(button: event.scrollingDeltaY > 0 ? 4 : 5,
+                                    release: false,
+                                    shift: f.contains(.shift),
+                                    meta: f.contains(.option),
+                                    control: f.contains(.control))
+            // One report per ~3 points of delta so it feels like line scrolling,
+            // clamped so a fast flick can't flood the PTY.
+            let steps = max(1, min(Int(abs(event.scrollingDeltaY) / 3), 8))
+            for _ in 0..<steps { t.sendEvent(buttonFlags: cb, x: cell.col, y: cell.row) }
+            return nil
+        }
+    }
+
+    /// Walk the hit-test result under the scroll event's pointer up to the
+    /// enclosing terminal view, if any. Used to target wheel reports at the
+    /// terminal under the cursor rather than the focused one.
+    private static func terminalUnderPointer(for event: NSEvent) -> InterceptingTerminalView? {
+        guard let root = event.window?.contentView else { return nil }
+        // hitTest's activate/bring-to-front side effects are gated on a pressed
+        // mouse button, so calling it during a scroll (no buttons) is safe.
+        var v = root.hitTest(event.locationInWindow)
+        while let cur = v {
+            if let tv = cur as? InterceptingTerminalView { return tv }
+            v = cur.superview
+        }
+        return nil
     }
 
     private static func cellAt(local: NSPoint, termView: InterceptingTerminalView) -> (col: Int, row: Int)? {
