@@ -569,11 +569,14 @@ final class TerminalWindowView: NSView {
         // (matches Ghostty/web-browser convention). SwiftTerm sets I-beam in its own
         // mouseMoved; we dispatch async so our cursor set runs AFTER SwiftTerm's.
         NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved, .flagsChanged]) { event in
-            guard let (_, tv) = activeTerminalWindow(for: event) else {
-                if sharedLinkCursorActive {
-                    sharedLinkCursorActive = false
-                    DispatchQueue.main.async { NSCursor.iBeam.set() }
-                }
+            // Gate on the terminal *under the pointer*, not the focused one. A
+            // text annotation (or other widget) layered over a terminal in world
+            // space manages its own cursor — keying off the first responder made
+            // us fight it, flickering between I-beam and the widget's cursor.
+            guard let tv = terminalUnderPointer(for: event) else {
+                // Off the terminal: clear our state but DON'T touch the cursor —
+                // whatever view is now under the pointer owns it.
+                sharedLinkCursorActive = false
                 lastLinkHitKey = nil
                 lastLinkHit = nil
                 return event
