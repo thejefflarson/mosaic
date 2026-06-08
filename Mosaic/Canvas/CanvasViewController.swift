@@ -307,6 +307,9 @@ final class CanvasViewController: NSViewController {
             vp.panX = -worldPt.x * vp.zoom + canvasView.bounds.width / 2
             vp.panY = -worldPt.y * vp.zoom + canvasView.bounds.height / 2
             canvasView.setViewport(vp)
+            // Jumping the viewport via the minimap should make the terminal you
+            // land on active — independent of the focus-follows-center toggle.
+            activateTerminalNearest(worldPt)
         }
 
         minimapView.onResized = { [weak self] in
@@ -756,11 +759,17 @@ final class CanvasViewController: NSViewController {
     private func updateFocusFollowsCenter() {
         guard toolPalette.focusFollowsCenter else { return }
         let screenCenter = CGPoint(x: canvasView.bounds.midX, y: canvasView.bounds.midY)
-        let worldCenter = canvasView.viewport.screenToWorld(screenCenter)
+        activateTerminalNearest(canvasView.viewport.screenToWorld(screenCenter))
+    }
+
+    /// Activate (and focus) the terminal whose center is nearest `worldPoint`.
+    /// No-op when it's already the active terminal. Shared by focus-follows-center
+    /// and minimap navigation — jumping the viewport somewhere should make the
+    /// terminal you land on the active one.
+    private func activateTerminalNearest(_ worldPoint: CGPoint) {
         guard let closest = terminalController.windows.min(by: {
-            let da = hypot($0.frame.midX - worldCenter.x, $0.frame.midY - worldCenter.y)
-            let db = hypot($1.frame.midX - worldCenter.x, $1.frame.midY - worldCenter.y)
-            return da < db
+            hypot($0.frame.midX - worldPoint.x, $0.frame.midY - worldPoint.y) <
+            hypot($1.frame.midX - worldPoint.x, $1.frame.midY - worldPoint.y)
         }) else { return }
         guard closest !== canvasView.activeTerminal else { return }
         canvasView.activateTerminal(closest)
