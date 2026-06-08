@@ -289,7 +289,27 @@ final class CanvasView: FlippedView {
         if selectionRingsLayer.path != nil {
             selectionRingsLayer.lineWidth = 2 / viewport.zoom
         }
+        updateCulling()
         onViewportChanged?(viewport)
+    }
+
+    /// Hide terminals whose world-space frame doesn't intersect the visible
+    /// rect so off-screen terminals cost nothing to composite (no CALayer
+    /// backing store kept warm, no redraw). The PTY process is independent of
+    /// view visibility, so it keeps running — only rendering is skipped.
+    /// Called on every viewport change and whenever a terminal's frame changes.
+    func updateCulling() {
+        // worldView.bounds is exactly the world-space region currently mapped
+        // to the view (set in applyViewport). Pad it by a quarter-viewport so a
+        // terminal just past the edge doesn't pop in and out during a pan.
+        let visible = worldView.bounds.insetBy(dx: -worldView.bounds.width * 0.25,
+                                               dy: -worldView.bounds.height * 0.25)
+        for case let tw as TerminalWindowView in worldView.subviews {
+            let shouldShow = tw.frame.intersects(visible)
+            if tw.isHidden == shouldShow {   // state actually changed
+                tw.isHidden = !shouldShow
+            }
+        }
     }
 
     func setViewport(_ vp: Viewport) {
@@ -299,6 +319,7 @@ final class CanvasView: FlippedView {
 
     func addTerminal(_ tw: TerminalWindowView) {
         worldView.addSubview(tw)
+        updateCulling()
     }
 
     /// Terminals in their current z-order (bottom to top), matching visual stacking.

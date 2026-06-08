@@ -121,6 +121,9 @@ final class CanvasViewController: NSViewController {
             clearSnap: { [weak self] in self?.snapOverlay.guides = [] }
         )
         terminalController.onChange = { [weak self] in
+            // Recull on any terminal mutation — a move/resize/group-drag can
+            // push a peer off-screen (or pull one back) without a viewport change.
+            self?.canvasView.updateCulling()
             self?.updateMinimap()
             self?.updateSelectionRings()
             self?.scheduleSave()
