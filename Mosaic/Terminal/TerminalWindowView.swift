@@ -530,6 +530,12 @@ final class TerminalWindowView: NSView {
         return nil
     }
 
+    // Wheel→PTY scroll accumulator state (see the .scrollWheel monitor). Points
+    // of trackpad/wheel delta per emitted line report — higher is slower.
+    private static let wheelPointsPerLine: CGFloat = 8
+    private static var wheelAccumulator: CGFloat = 0
+    private static weak var wheelTarget: InterceptingTerminalView?
+
     /// Install shared event monitors once. Each monitor finds the active terminal
     /// via the first responder — O(1) per event regardless of terminal count.
     private static func installSharedMonitors() {
@@ -633,15 +639,29 @@ final class TerminalWindowView: NSView {
             let f = event.modifierFlags
             // Wheel up = button 4, wheel down = button 5. Match SwiftTerm's
             // local-scroll sense (positive deltaY → toward older content → up).
-            let cb = t.encodeButton(button: event.scrollingDeltaY > 0 ? 4 : 5,
+            let up = event.scrollingDeltaY > 0
+            let cb = t.encodeButton(button: up ? 4 : 5,
                                     release: false,
                                     shift: f.contains(.shift),
                                     meta: f.contains(.option),
                                     control: f.contains(.control))
-            // One report per ~3 points of delta so it feels like line scrolling,
-            // clamped so a fast flick can't flood the PTY.
-            let steps = max(1, min(Int(abs(event.scrollingDeltaY) / 3), 8))
-            for _ in 0..<steps { t.sendEvent(buttonFlags: cb, x: cell.col, y: cell.row) }
+            // Emit one line report per `wheelPointsPerLine` points of accumulated
+            // delta. Accumulating across events (rather than min(delta/3, 8) per
+            // event) ties scroll distance to how far the finger actually moved, so
+            // trackpad momentum — which fires many small events — can't flood the
+            // PTY. Reset the accumulator when the target terminal or scroll
+            // direction changes so stale delta doesn't carry over.
+            if tv !== wheelTarget || up != (wheelAccumulator > 0) {
+                wheelAccumulator = 0
+                wheelTarget = tv
+            }
+            wheelAccumulator += event.scrollingDeltaY
+            var emitted = 0
+            while abs(wheelAccumulator) >= wheelPointsPerLine && emitted < 4 {
+                t.sendEvent(buttonFlags: cb, x: cell.col, y: cell.row)
+                wheelAccumulator -= up ? wheelPointsPerLine : -wheelPointsPerLine
+                emitted += 1
+            }
             return nil
         }
     }
@@ -1397,21 +1417,53 @@ final class TerminalWindowView: NSView {
         window?.makeFirstResponder(termView)
     }
 
-    // SwiftTerm's pendingDisplay throttle races between background feeds and
-    // main-thread resets; long-running apps occasionally see it stick `true`,
-    // freezing the view until a scroll forces setNeedsDisplay. Nudge AppKit
-    // ourselves whenever the buffer has unrendered updates.
+    // SwiftTerm coalesces redraws behind a 60fps `pendingDisplay` throttle and
+    // invalidates only the changed row band via `setNeedsDisplay(region)`. Two
+    // failure modes surface in long-running sessions and TUIs:
+    //
+    //   1. A dropped/stalled main-queue frame leaves the throttle armed
+    //      (`pendingDisplay == true`), so rows fed afterwards never repaint until
+    //      an unrelated event forces a draw — the classic "nothing renders until
+    //      I scroll" freeze.
+    //   2. Partial-region invalidation leaves stale rows on screen ("garbled"
+    //      output) when the buffer changed more than the invalidated band, which
+    //      happens constantly in alt-screen TUIs like claude that rewrite the
+    //      whole viewport.
+    //
+    // This watchdog is a safety net for both. Whenever the terminal reports
+    // unflushed buffer changes, we clear the range we're about to satisfy (so a
+    // sustained stall doesn't repaint the same dirty band every tick — a later
+    // feed re-arms it) and force a *full* invalidation. `draw()` always paints
+    // every visible row from the live buffer, so forcing full redraws can never
+    // lose or duplicate content; it only defeats the stale-row garble and breaks
+    // the stuck throttle. In the healthy case SwiftTerm has already flushed
+    // within 16ms, so `getUpdateRange()` is nil and this is a two-int read.
     private var redrawWatchdog: DispatchSourceTimer?
 
     private func startRedrawWatchdog() {
         let t = DispatchSource.makeTimerSource(queue: .main)
-        t.schedule(deadline: .now() + 1, repeating: 1, leeway: .milliseconds(200))
+        // ~30fps: a stalled frame recovers before it's perceptible. The generous
+        // leeway lets the kernel coalesce wakeups so an idle terminal (gate below
+        // is nil) costs almost nothing.
+        t.schedule(deadline: .now() + 0.033, repeating: 0.033, leeway: .milliseconds(16))
         t.setEventHandler { [weak self] in
-            guard let self, self.termView.getTerminal().getUpdateRange() != nil else { return }
+            guard let self, !self.termView.isHidden else { return }
+            let terminal = self.termView.getTerminal()
+            guard terminal.getUpdateRange() != nil else { return }
+            terminal.clearUpdateRange()
             self.termView.needsDisplay = true
         }
         t.resume()
         redrawWatchdog = t
+    }
+
+    /// Force a full repaint from the live buffer. Used when a terminal is
+    /// revealed after viewport culling hid it: rows fed while `isHidden` cleared
+    /// SwiftTerm's update range without ever painting, so the on-screen content
+    /// can be stale even though AppKit considers the view clean.
+    func forceFullRedraw() {
+        termView.getTerminal().clearUpdateRange()
+        termView.needsDisplay = true
     }
 
     deinit { redrawWatchdog?.cancel() }

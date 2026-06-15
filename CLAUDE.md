@@ -126,7 +126,7 @@ security-relevant ADRs.
 
 ## Known workarounds to revisit
 
-**Xcode 26.4 test runner hang (added 2026-03-31):** `xcodebuild test` hangs for ~340 seconds with "The test runner hung before establishing connection" on Xcode 26.4 / macOS 26.4 regardless of test code. This is an Xcode 26.4 regression — CI uses Xcode 26.2 where tests run fine. Do not spend time debugging this locally; just push and let CI validate.
+**`xcodebuild test` hangs inside the sandbox (added 2026-03-31, root cause corrected 2026-06-14):** `xcodebuild test` hangs for ~340 seconds with "The test runner hung before establishing connection" when run **inside the sandbox** (ziplock / Claude Code default) — the test runner can't establish its connection through the sandbox. This is NOT an Xcode-version regression (it was misattributed to Xcode 26.4 originally). `xcodebuild build` works sandboxed; only `test` hangs. Default to push-and-let-CI-validate. Run tests locally ONLY when explicitly running outside the sandbox, where the full suite passes in ~2s.
 
 **Kitty keyboard arrow key fix (added 2026-03-25, revisit ~2026-04-08):** Claude Code v2.1.83
 introduced a regression ("Fixed mouse tracking escape sequences leaking to shell prompt after exit")
