@@ -587,6 +587,20 @@ final class TerminalWindowView: NSView {
                 lastLinkHit = nil
                 return event
             }
+            // Suppress no-button hover motion. In any-event mouse mode (DECSET
+            // 1003) SwiftTerm reports a button-less move as a left-button *release*
+            // (`CSI<…m`): its SGR encoder keys the terminator on the low two button
+            // bits being `3`, true for both a release and a no-button move, so apps
+            // like Claude Code read the phantom releases as clicks. We can't
+            // override `mouseMoved` (SwiftTerm declares it public, not open) to fix
+            // the encoding, so we drop bare hover motion entirely by consuming the
+            // event before SwiftTerm sees it. Button press/release, drag selection,
+            // and wheel scroll are unaffected — they go through SwiftTerm's correct
+            // paths. The only loss is hover-highlight in TUIs that use 1003, which
+            // is not worth reimplementing SwiftTerm's mouse pipeline from outside.
+            if event.type == .mouseMoved, tv.getTerminal().mouseMode == .anyEvent {
+                return nil
+            }
             let windowPoint: NSPoint
             if event.type == .mouseMoved {
                 windowPoint = event.locationInWindow
