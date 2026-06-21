@@ -1174,6 +1174,20 @@ final class TerminalWindowView: NSView {
         env["TERM"] = "xterm-256color"
         env["COLORTERM"] = "truecolor"
 
+        // Ensure a UTF-8 locale. When Mosaic is launched from the Finder/`open`
+        // (a GUI app), macOS does NOT populate LANG/LC_* — only Terminal.app
+        // injects them, from its "Set locale on startup" preference. Without a
+        // UTF-8 locale, programs fall back to C/POSIX (ASCII) and decode the
+        // PTY's UTF-8 bytes as Latin-1/MacRoman, so multi-byte glyphs render as
+        // mojibake (e.g. claude code's "⏺"/"…" markers come out as "‚è∫"/"‚Ä¶").
+        // Only fill in LANG when nothing already establishes the character type,
+        // so an explicit user locale (LC_ALL/LC_CTYPE/LANG) is never overridden.
+        if env["LANG"] == nil, env["LC_ALL"] == nil, env["LC_CTYPE"] == nil {
+            let lang = Locale.current.language.languageCode?.identifier ?? "en"
+            let region = Locale.current.region?.identifier ?? "US"
+            env["LANG"] = "\(lang)_\(region).UTF-8"
+        }
+
         var isDir: ObjCBool = false
         let cwdExists = FileManager.default.fileExists(atPath: currentCwd, isDirectory: &isDir) && isDir.boolValue
         let cwd = cwdExists ? currentCwd : FileManager.default.homeDirectoryForCurrentUser.path
