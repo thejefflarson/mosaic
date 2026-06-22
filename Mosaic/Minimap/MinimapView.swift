@@ -1,9 +1,19 @@
 import AppKit
 
+/// A canvas overlay that owns its cursor even while the global hover monitor
+/// consumes `mouseMoved` (to stop hover leaking to a terminal beneath it). When
+/// the monitor consumes the event, AppKit's `cursorUpdate` is suppressed, so the
+/// monitor asks the topmost conforming view for the cursor and sets it directly.
+@MainActor protocol HoverCursorProviding: AnyObject {
+    /// Cursor for `localPoint` (in this view's own coordinates), or nil for the
+    /// system default.
+    func hoverCursor(at localPoint: NSPoint) -> NSCursor?
+}
+
 /// A fixed overlay that renders a bird's-eye view of the entire canvas,
 /// updated synchronously whenever the canvas state changes.
 /// The top-left corner is a drag handle for resizing.
-final class MinimapView: FlippedView {
+final class MinimapView: FlippedView, HoverCursorProviding {
 
     var onPanToWorld: ((CGPoint) -> Void)?
     var onResized: (() -> Void)?
@@ -238,18 +248,29 @@ final class MinimapView: FlippedView {
 
     // MARK: - Cursor
 
+    /// Resize cursor for the top-left handle (system frame-resize on macOS 15+).
+    private static var cornerCursor: NSCursor {
+        if #available(macOS 15, *) {
+            return NSCursor.frameResize(position: .topLeft, directions: .all)
+        }
+        return .crosshair
+    }
+
+    /// True when `point` (view coordinates) is inside the top-left resize handle.
+    private func isInHandle(_ point: NSPoint) -> Bool {
+        point.x < Self.handleSize && point.y < Self.handleSize
+    }
+
     override func resetCursorRects() {
         let handle = NSRect(x: 0, y: 0, width: Self.handleSize, height: Self.handleSize)
-        let corner: NSCursor
-        if #available(macOS 15, *) {
-            corner = NSCursor.frameResize(position: .topLeft, directions: .all)
-        } else {
-            corner = .crosshair
-        }
-        addCursorRect(handle, cursor: corner)
+        addCursorRect(handle, cursor: Self.cornerCursor)
         let rest = NSRect(x: Self.handleSize, y: 0,
                           width: bounds.width - Self.handleSize, height: bounds.height)
         addCursorRect(rest, cursor: .pointingHand)
+    }
+
+    func hoverCursor(at localPoint: NSPoint) -> NSCursor? {
+        isInHandle(localPoint) ? Self.cornerCursor : .pointingHand
     }
 
     // MARK: - Mouse: resize (top-left handle) or pan (everywhere else)

@@ -571,67 +571,90 @@ final class TerminalWindowView: NSView {
             return NSEvent(cgEvent: cgCopy) ?? event
         }
 
-        // Link hover: show pointing-hand cursor automatically over OSC 8 hyperlinks
-        // (matches Ghostty/web-browser convention). SwiftTerm sets I-beam in its own
-        // mouseMoved; we dispatch async so our cursor set runs AFTER SwiftTerm's.
+        // Hover handling has two independent jobs:
+        //
+        //   1. Link cursor — show the pointing-hand over OSC-8 hyperlinks on the
+        //      topmost terminal under the pointer (matches Ghostty/browsers).
+        //
+        //   2. Any-event (DECSET 1003) hover suppression — drop button-less hover
+        //      motion so it neither phantom-clicks the focused terminal (SwiftTerm's
+        //      SGR encoder mis-tags a no-button move as a left-button release, which
+        //      Claude Code reads as a click) NOR leaks to an *occluded* terminal.
+        //      The leak exists because SwiftTerm delivers `mouseMoved` through an
+        //      NSTrackingArea, and tracking areas fire on geometry alone — they
+        //      ignore z-order. So a 1003 terminal sitting behind another window (or
+        //      behind the minimap) still gets hover motion and reports it to its PTY.
+        //
+        // Crucially, only 1003 hover leaks: SwiftTerm's `mouseMoved` calls
+        // `sendMotion` only when `mouseMode.sendMotionEvent()` is true, which is true
+        // *only* for `.anyEvent`. A normal-mode terminal's occluded tracking area
+        // firing is harmless (an invisible I-beam `cursorUpdate` under an opaque
+        // window; nothing reaches its PTY). So we consume `mouseMoved` *only* when a
+        // 1003 terminal is under the pointer — leaving normal-mode and empty-canvas
+        // hovers untouched, so AppKit's cursor-rect machinery keeps working and the
+        // cursor never sticks. We can't override `mouseMoved`/`cursorUpdate`
+        // (SwiftTerm declares them public, not open), so consuming is the only lever.
         NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved, .flagsChanged]) { event in
-            // Gate on the terminal *under the pointer*, not the focused one. A
-            // text annotation (or other widget) layered over a terminal in world
-            // space manages its own cursor — keying off the first responder made
-            // us fight it, flickering between I-beam and the widget's cursor.
-            guard let tv = terminalUnderPointer(for: event) else {
-                // Off the terminal: clear our state but DON'T touch the cursor —
-                // whatever view is now under the pointer owns it.
+            let tv = terminalUnderPointer(for: event)
+
+            // --- Job 1: link cursor for the topmost terminal ---
+            if let tv {
+                let windowPoint = event.type == .mouseMoved
+                    ? event.locationInWindow
+                    : (event.window?.mouseLocationOutsideOfEventStream ?? event.locationInWindow)
+                let local = tv.convert(windowPoint, from: nil)
+                let tvKey = ObjectIdentifier(tv)
+                if let cell = cellAt(local: local, termView: tv) {
+                    // Re-run the link lookup only when the cell or terminal changed.
+                    if lastLinkHitKey != tvKey || lastLinkHit == nil || lastLinkHit! != cell {
+                        lastLinkHitKey = tvKey
+                        lastLinkHit = cell
+                        let overLink = tv.getTerminal().link(
+                            at: .screen(Position(col: cell.col, row: cell.row)),
+                            mode: .explicitAndImplicit) != nil
+                        if overLink != sharedLinkCursorActive {
+                            sharedLinkCursorActive = overLink
+                            DispatchQueue.main.async {
+                                (overLink ? NSCursor.pointingHand : NSCursor.iBeam).set()
+                            }
+                        }
+                    }
+                } else {
+                    // Over the terminal view but off the text grid.
+                    if sharedLinkCursorActive {
+                        sharedLinkCursorActive = false
+                        DispatchQueue.main.async { NSCursor.iBeam.set() }
+                    }
+                    lastLinkHitKey = nil
+                    lastLinkHit = nil
+                }
+            } else {
+                // Not over a terminal — whatever view is under the pointer owns its
+                // own cursor (minimap, palette, annotation, empty canvas).
                 sharedLinkCursorActive = false
                 lastLinkHitKey = nil
                 lastLinkHit = nil
-                return event
             }
-            // Suppress no-button hover motion. In any-event mouse mode (DECSET
-            // 1003) SwiftTerm reports a button-less move as a left-button *release*
-            // (`CSI<…m`): its SGR encoder keys the terminator on the low two button
-            // bits being `3`, true for both a release and a no-button move, so apps
-            // like Claude Code read the phantom releases as clicks. We can't
-            // override `mouseMoved` (SwiftTerm declares it public, not open) to fix
-            // the encoding, so we drop bare hover motion entirely by consuming the
-            // event before SwiftTerm sees it. Button press/release, drag selection,
-            // and wheel scroll are unaffected — they go through SwiftTerm's correct
-            // paths. The only loss is hover-highlight in TUIs that use 1003, which
-            // is not worth reimplementing SwiftTerm's mouse pipeline from outside.
-            if event.type == .mouseMoved, tv.getTerminal().mouseMode == .anyEvent {
-                return nil
-            }
-            let windowPoint: NSPoint
-            if event.type == .mouseMoved {
-                windowPoint = event.locationInWindow
-            } else if let win = event.window {
-                windowPoint = win.mouseLocationOutsideOfEventStream
-            } else {
-                return event
-            }
-            let local = tv.convert(windowPoint, from: nil)
-            let tvKey = ObjectIdentifier(tv)
-            guard let cell = cellAt(local: local, termView: tv) else {
-                if sharedLinkCursorActive {
-                    sharedLinkCursorActive = false
-                    DispatchQueue.main.async { NSCursor.iBeam.set() }
+
+            // --- Job 2: suppress 1003 hover (only when it would actually leak) ---
+            // flagsChanged must always reach the responder chain; only mouseMoved is
+            // ever consumed. Consuming starves AppKit's `cursorUpdate`, so wherever
+            // we consume we must own the cursor ourselves:
+            //   • topmost is a terminal  → cursor already set in Job 1.
+            //   • topmost is an overlay that owns its cursor (the minimap) → ask it
+            //     for the cursor and set it directly, so the overlay stays fully in
+            //     control of the pointer and nothing leaks to the terminal beneath.
+            //   • any other overlay (tool palette, annotation) → pass through; the
+            //     rare leak is preferable to fighting its own cursor handling.
+            if event.type == .mouseMoved, anyEventTerminalUnderPointer(for: event) {
+                if tv != nil { return nil }
+                if let overlay = hoverCursorView(for: event) {
+                    let local = overlay.convert(event.locationInWindow, from: nil)
+                    if let cursor = overlay.hoverCursor(at: local) {
+                        DispatchQueue.main.async { cursor.set() }
+                    }
+                    return nil
                 }
-                lastLinkHitKey = nil
-                lastLinkHit = nil
-                return event
-            }
-            // Skip the link lookup only when the cell AND the terminal still match.
-            if lastLinkHitKey == tvKey, let last = lastLinkHit, last == cell { return event }
-            lastLinkHitKey = tvKey
-            lastLinkHit = cell
-            let overLink = tv.getTerminal().link(
-                at: .screen(Position(col: cell.col, row: cell.row)),
-                mode: .explicitAndImplicit) != nil
-            guard overLink != sharedLinkCursorActive else { return event }
-            sharedLinkCursorActive = overLink
-            // Set cursor AFTER SwiftTerm's mouseMoved delivers I-beam.
-            DispatchQueue.main.async {
-                (overLink ? NSCursor.pointingHand : NSCursor.iBeam).set()
             }
             return event
         }
@@ -678,6 +701,41 @@ final class TerminalWindowView: NSView {
             }
             return nil
         }
+    }
+
+    /// True when *any* terminal whose frame contains the pointer is in any-event
+    /// (DECSET 1003) mouse mode — including terminals occluded by a window or
+    /// overlay on top. Deliberately occlusion-blind (unlike hitTest): a 1003
+    /// terminal hidden behind another still receives hover through its tracking
+    /// area, so its presence under the pointer is what we must suppress.
+    private static func anyEventTerminalUnderPointer(for event: NSEvent) -> Bool {
+        guard let root = event.window?.contentView else { return false }
+        let point = event.locationInWindow
+        func scan(_ view: NSView) -> Bool {
+            for sub in view.subviews {
+                if let tv = sub as? InterceptingTerminalView,
+                   !tv.isHiddenOrHasHiddenAncestor,
+                   tv.getTerminal().mouseMode == .anyEvent,
+                   tv.convert(tv.bounds, to: nil).contains(point) {
+                    return true
+                }
+                if scan(sub) { return true }
+            }
+            return false
+        }
+        return scan(root)
+    }
+
+    /// Topmost view under the pointer that supplies its own cursor while hover is
+    /// consumed (e.g. the minimap). Walks the hit-test chain z-order-aware.
+    private static func hoverCursorView(for event: NSEvent) -> (NSView & HoverCursorProviding)? {
+        guard let root = event.window?.contentView else { return nil }
+        var v = root.hitTest(event.locationInWindow)
+        while let cur = v {
+            if let provider = cur as? (NSView & HoverCursorProviding) { return provider }
+            v = cur.superview
+        }
+        return nil
     }
 
     /// Walk the hit-test result under the scroll event's pointer up to the
