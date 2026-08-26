@@ -300,7 +300,10 @@ final class InterceptingTerminalView: LocalProcessTerminalView {
     }
 
     override func bell(source: Terminal) {
-        super.bell(source: source)
+        // Deliberately does NOT call super.bell: SwiftTerm's default rings
+        // NSSound.beep() for every BEL, which is just noise. The bell instead drives
+        // the attention dot / desktop notification (and an optional border flash via
+        // flashOnBell) — a routable signal, not an audible ping.
         Task { @MainActor [weak self] in
             self?.onBell?()
         }
@@ -899,8 +902,13 @@ final class TerminalWindowView: NSView {
         // `queue: .main` already guarantees this block runs on the main thread;
         // `assumeIsolated` asserts that to the type-checker without a `Task`
         // allocation + extra run-loop hop on every app activation change.
-        let handler: @Sendable (Notification) -> Void = { [weak self] _ in
-            MainActor.assumeIsolated { self?.updateActivityFocusState() }
+        let handler: @Sendable (Notification) -> Void = { [weak self] note in
+            // Derive app-active from the notification identity, not NSApp.isActive:
+            // during didResignActive, NSApp.isActive can still read true, which would
+            // wrongly keep the active terminal suppressed when you background Mosaic —
+            // so a terminal you were looking at would never notify. (ADR 007 §3.)
+            let appActive = note.name == NSApplication.didBecomeActiveNotification
+            MainActor.assumeIsolated { self?.updateActivityFocusState(appActive: appActive) }
         }
         appActivationObservers = [
             center.addObserver(forName: NSApplication.didBecomeActiveNotification,
@@ -917,8 +925,8 @@ final class TerminalWindowView: NSView {
     /// (`NSApp.isActive`). Called whenever any of the three changes; idempotent
     /// like every other reducer input, so redundant calls (e.g. every terminal
     /// hearing the same app-activation notification) are harmless.
-    private func updateActivityFocusState() {
-        if isActive, !isHidden, NSApp.isActive {
+    private func updateActivityFocusState(appActive: Bool = NSApp.isActive) {
+        if isActive, !isHidden, appActive {
             reduceActivity(.becameActiveAndVisible)
         } else {
             reduceActivity(.resignedActiveOrHidden)

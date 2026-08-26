@@ -1051,7 +1051,8 @@ final class CanvasViewController: NSViewController {
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = body
-        content.sound = .default
+        // No sound — the banner + dock badge are the signal (the user doesn't want an
+        // audible ping, and a raw terminal BEL already makes noise of its own).
         UNUserNotificationCenter.current().add(
             UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
     }
