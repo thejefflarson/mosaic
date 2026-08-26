@@ -4,25 +4,14 @@ final class TitleBarView: NSView {
     let titleLabel = NSTextField(labelWithString: "Terminal")
     let closeButton = NSButton()
     private let statusIndicator = StatusIndicatorView()
-    private var statusFadeTimer: Timer?
 
-    enum Status {
-        case idle
-        case finished(exitCode: Int?)
-    }
-
-    func setStatus(_ status: Status) {
-        statusFadeTimer?.invalidate()
-        statusFadeTimer = nil
-        switch status {
-        case .idle:
-            statusIndicator.state = .idle
-        case .finished(let exit):
-            statusIndicator.state = .finished(success: (exit ?? 0) == 0)
-            statusFadeTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: false) { [weak self] _ in
-                Task { @MainActor [weak self] in self?.statusIndicator.state = .idle }
-            }
-        }
+    /// Mirror the terminal's `ActivityState` (Docs/ADR/007-agent-attention-routing.md)
+    /// into the status dot. No timer, no self-owned fade here: the reducer is the
+    /// single source of truth for how long the indicator stays lit — this view just
+    /// renders whatever `TerminalWindowView.onActivityChange` last reported. Attention
+    /// persists until the reducer clears it (focus-while-visible or a keystroke).
+    func setActivity(_ state: ActivityState) {
+        statusIndicator.activityState = state
     }
 
     var onClose: (() -> Void)?
@@ -131,6 +120,7 @@ final class TitleBarView: NSView {
     func applyTheme(background: NSColor, foreground: NSColor) {
         layer?.backgroundColor = background.cgColor
         titleLabel.textColor = foreground.withAlphaComponent(0.7)
+        statusIndicator.foregroundColor = foreground
     }
 
     @objc private func closePressed() {
@@ -189,22 +179,41 @@ final class TitleBarView: NSView {
     }
 }
 
-/// Small right-side dot that conveys command status:
-/// idle → invisible; busy → rotating dashed ring; finished → solid green or red.
+/// Small right-side dot that mirrors a terminal's `ActivityState` (ADR 007):
+/// `quiet` → invisible; `busy` → dim steady dot; `needsAttention` → pulsing dot,
+/// amber for a clean/unknown exit, red **triangle** for a nonzero exit — shape is
+/// the non-color channel that distinguishes "waiting" from "waiting with an error"
+/// at title-bar size. Colors are the ADR's fixed semantic palette (`Theme.swift`
+/// exposes no accent token): there is no persistent "success" color distinct from
+/// "waiting," since a finished command still needs the user's attention.
 final class StatusIndicatorView: NSView {
-    enum State: Equatable {
-        case idle
-        case finished(success: Bool)
+    var activityState: ActivityState = .quiet {
+        didSet {
+            guard activityState != oldValue else { return }
+            updateLayers()
+        }
     }
 
-    var state: State = .idle {
+    /// Theme foreground, used for the dim "busy" dot color. Set by `TitleBarView.applyTheme`.
+    var foregroundColor: NSColor = .white {
         didSet {
-            guard state != oldValue else { return }
+            guard case .busy = activityState else { return }
             updateLayers()
         }
     }
 
     private let dotLayer = CAShapeLayer()
+    private static let pulseAnimationKey = "attentionPulse"
+
+    /// Semantic test surface: assert on what the view is *showing*, not on the
+    /// `CAShapeLayer` that happens to render it, so a rendering-detail change
+    /// (e.g. drawing in `draw(_:)` instead of a shape layer) doesn't break tests
+    /// whose behavior didn't change.
+    enum DotShape: Equatable { case dot, triangle }
+    var isDotHidden: Bool { dotLayer.isHidden }
+    var dotFillColor: CGColor? { dotLayer.fillColor }
+    var dotShape: DotShape { isErrorTriangle ? .triangle : .dot }
+    var isPulsing: Bool { dotLayer.animation(forKey: Self.pulseAnimationKey) != nil }
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -218,26 +227,87 @@ final class StatusIndicatorView: NSView {
 
     private func setup() {
         wantsLayer = true
+        // Every state transition below must be instant (Docs/ADR/007-agent-attention-routing.md:
+        // clearing attention is immediate, not eased) — disable CALayer's default implicit
+        // animation on these properties once here, rather than wrapping every mutation in its
+        // own `CATransaction`.
+        dotLayer.actions = ["fillColor": NSNull(), "path": NSNull(), "hidden": NSNull(), "opacity": NSNull()]
         layer?.addSublayer(dotLayer)
         updateLayers()
     }
 
     override func layout() {
         super.layout()
+        updatePath()
+    }
+
+    private func updatePath() {
         let side = min(bounds.width, bounds.height)
+        // Guard against a zero/negative-size rect — `setup()` calls `updateLayers()` (which
+        // computes the path) before this view has ever been laid out, when `bounds` is still
+        // `.zero`; `insetBy(dx: 1, dy: 1)` on that turns negative, and CoreGraphics silently
+        // produces NaN geometry for a degenerate ellipse/triangle rect rather than erroring.
+        guard side > 2 else {
+            dotLayer.path = nil
+            return
+        }
         let rect = CGRect(x: (bounds.width - side) / 2,
                           y: (bounds.height - side) / 2,
-                          width: side, height: side)
-        dotLayer.path = CGPath(ellipseIn: rect.insetBy(dx: 1, dy: 1), transform: nil)
+                          width: side, height: side).insetBy(dx: 1, dy: 1)
+        dotLayer.path = isErrorTriangle ? Self.trianglePath(in: rect) : CGPath(ellipseIn: rect, transform: nil)
+    }
+
+    private var isErrorTriangle: Bool {
+        if case .needsAttention(let exitCode) = activityState, let exitCode, exitCode != 0 {
+            return true
+        }
+        return false
+    }
+
+    private static func trianglePath(in rect: CGRect) -> CGPath {
+        let path = CGMutablePath()
+        path.move(to: CGPoint(x: rect.midX, y: rect.maxY))
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.minX, y: rect.minY))
+        path.closeSubpath()
+        return path
     }
 
     private func updateLayers() {
-        switch state {
-        case .idle:
+        switch activityState {
+        case .quiet:
             dotLayer.isHidden = true
-        case .finished(let success):
+            stopPulse()
+        case .busy:
             dotLayer.isHidden = false
-            dotLayer.fillColor = (success ? NSColor.systemGreen : NSColor.systemRed).cgColor
+            dotLayer.fillColor = foregroundColor.withAlphaComponent(0.35).cgColor
+            stopPulse()
+        case .needsAttention:
+            dotLayer.isHidden = false
+            dotLayer.fillColor = (isErrorTriangle ? NSColor.systemRed : NSColor.systemOrange).cgColor
+            if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+                stopPulse()
+            } else {
+                startPulse()
+            }
         }
+        updatePath()
+    }
+
+    private func startPulse() {
+        guard dotLayer.animation(forKey: Self.pulseAnimationKey) == nil else { return }
+        let pulse = CABasicAnimation(keyPath: "opacity")
+        pulse.fromValue = 1.0
+        pulse.toValue = 0.35
+        pulse.duration = 0.9
+        pulse.autoreverses = true
+        pulse.repeatCount = .infinity
+        pulse.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        dotLayer.add(pulse, forKey: Self.pulseAnimationKey)
+    }
+
+    private func stopPulse() {
+        dotLayer.removeAnimation(forKey: Self.pulseAnimationKey)
+        dotLayer.opacity = 1
     }
 }
