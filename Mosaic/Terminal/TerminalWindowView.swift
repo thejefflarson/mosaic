@@ -1235,15 +1235,32 @@ final class TerminalWindowView: NSView {
         // Ensure a UTF-8 locale. When Mosaic is launched from the Finder/`open`
         // (a GUI app), macOS does NOT populate LANG/LC_* — only Terminal.app
         // injects them, from its "Set locale on startup" preference. Without a
-        // UTF-8 locale, programs fall back to C/POSIX (ASCII) and decode the
-        // PTY's UTF-8 bytes as Latin-1/MacRoman, so multi-byte glyphs render as
-        // mojibake (e.g. claude code's "⏺"/"…" markers come out as "‚è∫"/"‚Ä¶").
-        // Only fill in LANG when nothing already establishes the character type,
-        // so an explicit user locale (LC_ALL/LC_CTYPE/LANG) is never overridden.
-        if env["LANG"] == nil, env["LC_ALL"] == nil, env["LC_CTYPE"] == nil {
+        // UTF-8 locale, programs fall back to C/POSIX (ASCII) and mis-encode the
+        // terminal's UTF-8 stream, so multi-byte glyphs render as mojibake (em-dash
+        // "—" → "‚Äî", claude code's "⏺"/"…" → "‚è∫"/"‚Ä¶").
+        //
+        // It's not enough to check for *absent* vars: a launchd/`open` environment
+        // often carries a present-but-broken value — an empty `LANG=""`, an
+        // explicit `LC_CTYPE=C`, or the macOS quirk of a bare `LC_CTYPE=UTF-8` (no
+        // language prefix, which is an invalid locale programs reject → fall back to
+        // C). So resolve the effective character-type locale by POSIX precedence
+        // (LC_ALL > LC_CTYPE > LANG), treating empty values as unset, and only act
+        // when it isn't UTF-8.
+        func localeValue(_ key: String) -> String? {
+            guard let v = env[key], !v.isEmpty else { return nil }
+            return v
+        }
+        let effectiveCType = localeValue("LC_ALL") ?? localeValue("LC_CTYPE") ?? localeValue("LANG")
+        let isUTF8 = effectiveCType.map { $0.uppercased().contains("UTF-8") || $0.uppercased().contains("UTF8") } ?? false
+        if !isUTF8 {
             let lang = Locale.current.language.languageCode?.identifier ?? "en"
             let region = Locale.current.region?.identifier ?? "US"
-            env["LANG"] = "\(lang)_\(region).UTF-8"
+            let utf8Locale = "\(lang)_\(region).UTF-8"
+            // LC_ALL and LC_CTYPE, if set, override LANG for character type — so a
+            // non-UTF-8 one must be cleared, not merely shadowed by setting LANG.
+            env.removeValue(forKey: "LC_ALL")
+            env.removeValue(forKey: "LC_CTYPE")
+            env["LANG"] = utf8Locale
         }
 
         var isDir: ObjCBool = false
@@ -1571,9 +1588,18 @@ final class TerminalWindowView: NSView {
     }
 
     func terminate() {
-        // SwiftTerm tears down the PTY when the view is deallocated,
-        // but we can signal the process to exit cleanly.
+        // Signal the shell to exit cleanly (lets it flush / run exit traps)...
         termView.send(data: [0x04][...])  // Ctrl-D / EOF
+        // ...then tear down SwiftTerm's PTY plumbing. This call is essential, not
+        // optional: LocalProcessTerminalView.terminate() closes the DispatchIO read
+        // channel and cancels the child-process DispatchSource. Those sources are
+        // reachable from GCD's global registry and strongly retain this view — and
+        // through it the SwiftTerm Terminal, its Buffers, and every scrollback
+        // BufferLine. Without it the terminal never deallocates, so each closed
+        // terminal's entire scrollback stays resident forever (measured: 5 GB of
+        // ~1M BufferLines across ~70 closed terminals after a multi-day session).
+        // `leaks` won't flag it — the memory is reachable, not lost.
+        termView.terminate()
     }
 }
 
