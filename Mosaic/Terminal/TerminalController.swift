@@ -85,6 +85,10 @@ final class TerminalController {
     var onBell: ((TerminalWindowView) -> Void)?
     /// Called on OSC 9/777 notification with (terminal, title, body).
     var onNotification: ((TerminalWindowView, String, String) -> Void)?
+    /// Called when a terminal newly needs attention from a non-OSC source (bell, the
+    /// agent detector, output-idle heuristic) with (terminal, title, body) for a
+    /// desktop notification. The OSC path posts its own, so it doesn't route here.
+    var onNeedsAttention: ((TerminalWindowView, String, String) -> Void)?
     /// Called when any terminal's `activityState` changes (ADR 007). Deliberately
     /// separate from `onChange`: attention is runtime-only and never persisted, so
     /// routing it through `onChange` would re-arm the save debounce and recompute
@@ -215,6 +219,11 @@ final class TerminalController {
         tw.onNotification = { [weak self, weak tw] title, body in
             guard let self, let tw else { return }
             onNotification?(tw, title, body)
+        }
+
+        tw.onNeedsAttention = { [weak self, weak tw] title, body in
+            guard let self, let tw else { return }
+            onNeedsAttention?(tw, title, body)
         }
 
         tw.onActivityChange = { [weak self] in

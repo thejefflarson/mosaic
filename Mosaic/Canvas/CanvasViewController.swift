@@ -280,6 +280,9 @@ final class CanvasViewController: NSViewController {
         terminalController.onNotification = { [weak self] tw, title, body in
             self?.handleTerminalNotification(tw, title: title, body: body)
         }
+        terminalController.onNeedsAttention = { [weak self] tw, title, body in
+            self?.postAttentionNotification(tw, title: title, body: body)
+        }
         terminalController.onAttentionChange = { [weak self] in
             // Lighter than onChange (ADR 007): just the minimap/pill refresh, no
             // culling recompute or save-debounce re-arm — attention is runtime-only.
@@ -912,6 +915,10 @@ final class CanvasViewController: NSViewController {
         minimapView.setAccessibilityValue(
             waiting == 0 ? "no terminals waiting"
             : waiting == 1 ? "1 terminal waiting" : "\(waiting) terminals waiting")
+        // Dock-icon badge: the waiting count, visible even when Mosaic is in the
+        // background. NSApp.dockTile needs no entitlement and no notification
+        // permission (unlike UNUserNotification badges).
+        NSApp.dockTile.badgeLabel = waiting == 0 ? nil : "\(waiting)"
     }
 
     private func updateFocusFollowsCenter() {
@@ -1031,6 +1038,22 @@ final class CanvasViewController: NSViewController {
         let request = UNNotificationRequest(identifier: UUID().uuidString,
                                             content: content, trigger: nil)
         UNUserNotificationCenter.current().add(request)
+    }
+
+    /// Post a desktop notification when a terminal newly needs attention from a
+    /// non-OSC source (bell, the agent turn-done detector, the output-idle heuristic).
+    /// Only while the app is backgrounded — if Mosaic is frontmost the in-app dot,
+    /// pill, and dock badge already say it, and a banner would be noise. Flash/pan are
+    /// handled by the bell/OSC paths, not here.
+    private func postAttentionNotification(_ tw: TerminalWindowView, title: String, body: String) {
+        guard !NSApp.isActive else { return }
+        AppDelegate.requestNotificationAuthorizationIfNeeded()
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        content.sound = .default
+        UNUserNotificationCenter.current().add(
+            UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
     }
 }
 

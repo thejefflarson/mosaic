@@ -931,6 +931,14 @@ final class TerminalWindowView: NSView {
     /// no-ops, e.g. a bell while already `needsAttention`), drives the title-bar dot
     /// straight from the reducer — no fade timer of its own, see `TitleBarView.setActivity`
     /// — and fires `onActivityChange` for other consumers (e.g. the minimap).
+    /// Fired when this terminal newly enters `needsAttention` (a genuine raise, not an
+    /// exit-code promotion), carrying a title/body for a desktop notification. Not
+    /// fired when the OSC 777/9 path already posted its own richer notification for
+    /// the same raise (see `justPostedRichNotification`). Wired to a UNUserNotification
+    /// by `CanvasViewController`, gated on the app being backgrounded.
+    var onNeedsAttention: ((_ title: String, _ body: String) -> Void)?
+    private var justPostedRichNotification = false
+
     @discardableResult
     private func reduceActivity(_ event: ActivityEvent) -> ActivityState {
         let previous = activity.state
@@ -938,8 +946,20 @@ final class TerminalWindowView: NSView {
         if next != previous {
             titleBar.setActivity(next)
             onActivityChange?()
+            let wasAttention: Bool = { if case .needsAttention = previous { return true }; return false }()
+            if case .needsAttention = next, !wasAttention, !justPostedRichNotification {
+                onNeedsAttention?(currentTitle.isEmpty ? "Mosaic" : currentTitle,
+                                  attentionNotificationBody(for: next))
+            }
         }
         return next
+    }
+
+    private func attentionNotificationBody(for state: ActivityState) -> String {
+        if case .needsAttention(let code?) = state, code != 0 {
+            return "Finished with errors (exit \(code))"
+        }
+        return "Waiting for you"
     }
 
     /// Called from `InterceptingTerminalView.dataReceived(slice:)` on every
@@ -1248,7 +1268,13 @@ final class TerminalWindowView: NSView {
         guard notificationCount < 10 else { return }
         notificationCount += 1
         onNotification?(title, body)
+        // The OSC path posts its own rich notification via onNotification above, so
+        // suppress the generic raise-edge notification for the raise it's about to
+        // trigger. Bracketed tightly so a suppressed (active-and-visible) raise still
+        // clears the flag and a later non-OSC raise isn't skipped.
+        justPostedRichNotification = true
         reduceActivity(.notification(at: now))
+        justPostedRichNotification = false
     }
 
     /// Bound restored scrollback so a single pathological line (e.g.
