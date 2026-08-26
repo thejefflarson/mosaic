@@ -145,6 +145,15 @@ struct LinkResolutionTests {
         #expect(!cleaned.unicodeScalars.contains("\u{202C}"))
     }
 
+    @Test func clipboardStripsWeakBidiMarks() {
+        // LRM (U+200E), RLM (U+200F), ALM (U+061C) — weaker than the RLO/LRO
+        // overrides above, but can still nudge the visual ordering of digits or
+        // path segments; same residual Trojan-Source-style spoof risk.
+        let smuggled = "cd \u{200E}foo\u{200F}bar\u{061C}"
+        let cleaned = InterceptingTerminalView.sanitizeForClipboard(smuggled)
+        #expect(cleaned == "cd foobar")
+    }
+
     @Test func clipboardStripsZeroWidth() {
         let smuggled = "ls\u{200B}\u{200C}\u{FEFF}-la"
         let cleaned = InterceptingTerminalView.sanitizeForClipboard(smuggled)

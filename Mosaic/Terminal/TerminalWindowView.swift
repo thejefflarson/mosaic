@@ -145,11 +145,12 @@ final class InterceptingTerminalView: LocalProcessTerminalView {
     }
 
     /// Strip Unicode characters that allow malicious PTY output to display one thing
-    /// and paste another: bidi overrides (U+202A–U+202E, U+2066–U+2069), zero-width
-    /// chars (U+200B–U+200D, U+2060, U+FEFF), and the line/paragraph separators
-    /// (U+2028/U+2029) that some shells treat as newlines. Defends against the
-    /// "innocuous-looking command pastes as `rm -rf …`" class of attack
-    /// (cf. iTerm2 2017, CVE-2017-2671).
+    /// and paste another: bidi overrides/isolates (U+202A–U+202E, U+2066–U+2069) and
+    /// the weak directional marks (U+200E LRM, U+200F RLM, U+061C ALM) that can also
+    /// nudge visual ordering, zero-width chars (U+200B–U+200D, U+2060, U+FEFF), and
+    /// the line/paragraph separators (U+2028/U+2029) that some shells treat as
+    /// newlines. Defends against the "innocuous-looking command pastes as
+    /// `rm -rf …`" class of attack (cf. iTerm2 2017, CVE-2017-2671).
     ///
     /// NFKC normalisation is applied first to collapse full-width ASCII forms
     /// (ａ→a, ０→0, …) and other compatibility variants that could otherwise
@@ -169,6 +170,7 @@ final class InterceptingTerminalView: LocalProcessTerminalView {
                  0x80...0x9F:                                  // 8-bit C1 (incl. ESC variants)
                 continue
             case 0x202A...0x202E, 0x2066...0x2069,            // bidi overrides / isolates
+                 0x200E, 0x200F, 0x061C,                      // weak bidi marks (LRM/RLM/ALM)
                  0x200B...0x200D, 0x2060, 0xFEFF,             // zero-width
                  0xFE00...0xFE0F,                              // variation selectors
                  0xE0100...0xE01EF,                            // variation selectors supplement
@@ -201,8 +203,10 @@ final class InterceptingTerminalView: LocalProcessTerminalView {
 
     /// Clamp and strip control bytes from a notification field before forwarding to
     /// UNUserNotificationCenter — the payload comes from terminal output.
-    /// Also strips bidi override/isolate codepoints and zero-width characters to
-    /// prevent spoofed notification text (e.g. RLO-based direction reversal).
+    /// Also strips bidi override/isolate codepoints, the weak directional marks
+    /// (LRM/RLM/ALM), and zero-width characters to prevent spoofed notification text
+    /// (e.g. RLO-based direction reversal, or a weak mark nudging the visual order of
+    /// digits/paths shown in the banner).
     nonisolated static func sanitizeNotificationText(_ s: String, max: Int) -> String {
         var out = String.UnicodeScalarView()
         out.reserveCapacity(min(s.unicodeScalars.count, max))
@@ -213,6 +217,9 @@ final class InterceptingTerminalView: LocalProcessTerminalView {
             if v >= 0x80 && v <= 0x9F { continue }             // strip 8-bit C1
             // Strip bidi overrides/isolates — prevents RLO spoofing in notification banners.
             if (v >= 0x202A && v <= 0x202E) || (v >= 0x2066 && v <= 0x2069) { continue }
+            // Strip weak bidi marks (LRM U+200E, RLM U+200F, ALM U+061C) — same
+            // residual Trojan-Source-style spoof risk as the overrides/isolates above.
+            if v == 0x200E || v == 0x200F || v == 0x061C { continue }
             // Strip zero-width chars — prevents invisible payload smuggling.
             if (v >= 0x200B && v <= 0x200D) || v == 0x2060 || v == 0xFEFF { continue }
             out.append(scalar)
