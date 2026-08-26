@@ -28,6 +28,12 @@ enum ActivityEvent {
     case outputActivity(at: TimeInterval)
     case userKeystroke
     case becameActiveAndVisible
+    /// The inverse of `becameActiveAndVisible`: this terminal stopped being the
+    /// active, on-viewport terminal in the active app — it lost focus, the app
+    /// itself lost focus, or viewport culling hid it. Clears the suppression
+    /// flag `becameActiveAndVisible` set, so a signal arriving afterwards can
+    /// raise attention again.
+    case resignedActiveOrHidden
     case quietElapsed(at: TimeInterval)
 }
 
@@ -65,9 +71,9 @@ struct TerminalActivityModel {
     private var keystrokeDuringBusyPeriod = false
     /// Whether this terminal is currently the active, on-viewport terminal in the
     /// active app — raising events are suppressed while this holds, since the user is
-    /// already watching. Set by `becameActiveAndVisible`; wiring the corresponding
-    /// "no longer" transition is deferred to the ticket that connects this model to
-    /// `TerminalController`'s focus/culling state (ADR 007's extension seam is one new
+    /// already watching. Set by `becameActiveAndVisible`, cleared by
+    /// `resignedActiveOrHidden` — the pair `TerminalWindowView` drives from focus,
+    /// app-active, and viewport-culling changes (ADR 007's extension seam of one new
     /// `ActivityEvent` case plus one reducer clause).
     private var isActiveAndVisible = false
 
@@ -102,6 +108,9 @@ struct TerminalActivityModel {
             if case .needsAttention = state {
                 clearToQuiet()
             }
+
+        case .resignedActiveOrHidden:
+            isActiveAndVisible = false
 
         case .quietElapsed(let at):
             handleQuietElapsed(at: at)

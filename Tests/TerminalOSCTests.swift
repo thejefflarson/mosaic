@@ -33,6 +33,34 @@ struct TerminalOSCTests {
         #expect(InterceptingTerminalView.trimTrailingSpacesPerLine(input) == "line1\n\nline3")
     }
 
+    // MARK: - OSC 9
+    //
+    // Docs/ADR/008-osc9-notification-override.md: `9;<text>` is a desktop
+    // notification; `9;4;…` is the distinct ConEmu/Windows-Terminal progress
+    // protocol, which we deliberately ignore (SwiftTerm's native path for it is
+    // already a no-op — Mosaic never implements `progressReport`).
+
+    @Test func osc9ParsesPlainTextAsNotification() {
+        #expect(InterceptingTerminalView.parseOSC9("Build finished") == "Build finished")
+    }
+
+    @Test func osc9IgnoresProgressPayload() {
+        #expect(InterceptingTerminalView.parseOSC9("4;1;50") == nil)
+        #expect(InterceptingTerminalView.parseOSC9("4;0") == nil)
+    }
+
+    @Test func osc9EmptyTextIsStillAMessage() {
+        // Distinct from a progress payload; an empty notification body isn't
+        // malformed the way it would be for OSC 777.
+        #expect(InterceptingTerminalView.parseOSC9("") == "")
+    }
+
+    @Test func osc9DoesNotMisclassifyTextStartingWithFour() {
+        // Only an exact "4;" prefix is the progress protocol — a message that
+        // happens to start with the digit 4 is still a notification.
+        #expect(InterceptingTerminalView.parseOSC9("42 tests passed") == "42 tests passed")
+    }
+
     // MARK: - OSC 777
 
     @Test func osc777ParsesTitleAndBody() {

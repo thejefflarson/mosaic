@@ -41,6 +41,13 @@ final class InterceptingTerminalView: LocalProcessTerminalView {
     override func send(source: TerminalView, data: ArraySlice<UInt8>) {
         super.send(source: source, data: data)   // PTY receives input as normal
         guard !suppressBroadcast, Self.shouldBroadcast(data) else { return }
+        // Same gate as broadcast eligibility: excludes terminal protocol
+        // responses (DA1/DA2/CPR, filtered by shouldBroadcast) and data
+        // re-injected here via sendInput (suppressBroadcast) — this fires only
+        // for bytes the user actually typed at this terminal's keyboard, which
+        // is the reducer's "someone is actively driving this terminal" signal
+        // (ADR 007, decision 4's no-keystrokes guard).
+        enclosingTerminalWindowView?.recordKeystroke()
         onSendData?(data)
     }
 
@@ -103,6 +110,14 @@ final class InterceptingTerminalView: LocalProcessTerminalView {
         if wasReporting && !allowMouseReporting {
             allowMouseReporting = wasReporting
         }
+
+        // Feed the attention reducer's output-idle heuristic (ADR 007, decision
+        // 5) and reschedule the silence debounce. Called directly, not hopped —
+        // this runs on every output burst from SwiftTerm's parse/feed path, and
+        // (like the AppKit property reads/writes just above) is already on the
+        // main actor; a `Task` here would just allocate on a hot path for no
+        // isolation benefit.
+        enclosingTerminalWindowView?.recordOutputActivity(at: ProcessInfo.processInfo.systemUptime)
     }
 
     var onBell: (() -> Void)?
@@ -130,11 +145,12 @@ final class InterceptingTerminalView: LocalProcessTerminalView {
     }
 
     /// Strip Unicode characters that allow malicious PTY output to display one thing
-    /// and paste another: bidi overrides (U+202A–U+202E, U+2066–U+2069), zero-width
-    /// chars (U+200B–U+200D, U+2060, U+FEFF), and the line/paragraph separators
-    /// (U+2028/U+2029) that some shells treat as newlines. Defends against the
-    /// "innocuous-looking command pastes as `rm -rf …`" class of attack
-    /// (cf. iTerm2 2017, CVE-2017-2671).
+    /// and paste another: bidi overrides/isolates (U+202A–U+202E, U+2066–U+2069) and
+    /// the weak directional marks (U+200E LRM, U+200F RLM, U+061C ALM) that can also
+    /// nudge visual ordering, zero-width chars (U+200B–U+200D, U+2060, U+FEFF), and
+    /// the line/paragraph separators (U+2028/U+2029) that some shells treat as
+    /// newlines. Defends against the "innocuous-looking command pastes as
+    /// `rm -rf …`" class of attack (cf. iTerm2 2017, CVE-2017-2671).
     ///
     /// NFKC normalisation is applied first to collapse full-width ASCII forms
     /// (ａ→a, ０→0, …) and other compatibility variants that could otherwise
@@ -154,6 +170,7 @@ final class InterceptingTerminalView: LocalProcessTerminalView {
                  0x80...0x9F:                                  // 8-bit C1 (incl. ESC variants)
                 continue
             case 0x202A...0x202E, 0x2066...0x2069,            // bidi overrides / isolates
+                 0x200E, 0x200F, 0x061C,                      // weak bidi marks (LRM/RLM/ALM)
                  0x200B...0x200D, 0x2060, 0xFEFF,             // zero-width
                  0xFE00...0xFE0F,                              // variation selectors
                  0xE0100...0xE01EF,                            // variation selectors supplement
@@ -186,8 +203,10 @@ final class InterceptingTerminalView: LocalProcessTerminalView {
 
     /// Clamp and strip control bytes from a notification field before forwarding to
     /// UNUserNotificationCenter — the payload comes from terminal output.
-    /// Also strips bidi override/isolate codepoints and zero-width characters to
-    /// prevent spoofed notification text (e.g. RLO-based direction reversal).
+    /// Also strips bidi override/isolate codepoints, the weak directional marks
+    /// (LRM/RLM/ALM), and zero-width characters to prevent spoofed notification text
+    /// (e.g. RLO-based direction reversal, or a weak mark nudging the visual order of
+    /// digits/paths shown in the banner).
     nonisolated static func sanitizeNotificationText(_ s: String, max: Int) -> String {
         var out = String.UnicodeScalarView()
         out.reserveCapacity(min(s.unicodeScalars.count, max))
@@ -198,12 +217,35 @@ final class InterceptingTerminalView: LocalProcessTerminalView {
             if v >= 0x80 && v <= 0x9F { continue }             // strip 8-bit C1
             // Strip bidi overrides/isolates — prevents RLO spoofing in notification banners.
             if (v >= 0x202A && v <= 0x202E) || (v >= 0x2066 && v <= 0x2069) { continue }
+            // Strip weak bidi marks (LRM U+200E, RLM U+200F, ALM U+061C) — same
+            // residual Trojan-Source-style spoof risk as the overrides/isolates above.
+            if v == 0x200E || v == 0x200F || v == 0x061C { continue }
             // Strip zero-width chars — prevents invisible payload smuggling.
             if (v >= 0x200B && v <= 0x200D) || v == 0x2060 || v == 0xFEFF { continue }
             out.append(scalar)
             count += 1
         }
         return String(out)
+    }
+
+    /// Cap an OSC payload's raw byte count before decoding it as UTF-8. Shared
+    /// by the OSC 9/777/133 handlers below — all three buffer the full payload
+    /// off untrusted PTY output, so every one of them must reject an oversized
+    /// payload before spending the allocation on `String(bytes:encoding:)`, not
+    /// after.
+    static func decodeOSCPayload(_ data: ArraySlice<UInt8>, maxBytes: Int = 8192) -> String? {
+        guard data.count <= maxBytes else { return nil }
+        return String(bytes: data, encoding: .utf8) ?? ""
+    }
+
+    /// Parse an OSC 9 payload (minus the "9;" prefix) as the iTerm2/Growl
+    /// desktop-notification convention. Returns nil for a `4;…` payload — that's
+    /// the distinct ConEmu/Windows-Terminal *progress* protocol, which this
+    /// handler deliberately ignores rather than surfaces as a notification
+    /// (Docs/ADR/008-osc9-notification-override.md).
+    static func parseOSC9(_ text: String) -> String? {
+        guard !text.hasPrefix("4;") else { return nil }
+        return text
     }
 
     /// Parse an OSC 777 payload (minus the "777;" prefix) into (title, body).
@@ -484,6 +526,20 @@ final class TerminalWindowView: NSView {
 
     /// Active theme — applied 0.8 s after process start (after shell init sequences).
     var theme: Theme = .dark
+
+    // MARK: - Activity (ADR 007)
+    //
+    // The reducer this terminal drives; see Docs/ADR/007-agent-attention-routing.md.
+    // Every OSC/bell/keystroke/focus wiring below just translates one protocol or
+    // AppKit signal into one `ActivityEvent` — the reduction logic itself lives in
+    // `TerminalActivityModel`, not here.
+
+    private var activity = TerminalActivityModel()
+    var activityState: ActivityState { activity.state }
+    /// Fired when `activityState` actually changes (not on every event — many
+    /// events are no-ops, e.g. a bell while already `needsAttention`). No UI
+    /// consumes this yet; a later ticket wires it to the minimap/title-bar.
+    var onActivityChange: (() -> Void)?
 
     // MARK: - Subviews
 
@@ -777,9 +833,24 @@ final class TerminalWindowView: NSView {
     // MARK: - Focus state
 
     var isActive: Bool = false {
-        didSet { updateBorder() }
+        didSet {
+            updateBorder()
+            updateActivityFocusState()
+        }
     }
     var isBroadcast: Bool = false
+
+    /// `CanvasView.updateCulling()` toggles `isHidden` directly (not through a
+    /// setter of ours) to hide off-viewport terminals; hook that into the
+    /// attention reducer's suppression flag the same way `isActive` is (ADR
+    /// 007). Only matters while this terminal is also `isActive` — see
+    /// `updateActivityFocusState`.
+    override var isHidden: Bool {
+        didSet {
+            guard isHidden != oldValue else { return }
+            updateActivityFocusState()
+        }
+    }
 
     /// Flash the border a highlight color, pulsing twice before restoring.
     func flashBorder(color: NSColor = .systemGreen) {
@@ -802,6 +873,106 @@ final class TerminalWindowView: NSView {
         layer?.borderWidth = isActive ? 2 : 1
     }
 
+    // MARK: - Activity: focus & visibility
+
+    /// Observer tokens for `NSApplication.did{Become,Resign}ActiveNotification`,
+    /// removed in `deinit`. Per-terminal (mirroring the per-terminal debounce
+    /// timer below) rather than a single app-wide dispatcher, so this file stays
+    /// self-contained — no back-reference to `CanvasViewController` needed.
+    /// `nonisolated(unsafe)`: `NotificationCenter.removeObserver` is documented
+    /// thread-safe, and `deinit` isn't guaranteed to run on the main actor even
+    /// though the rest of this class is — ARC can deallocate from any thread.
+    private nonisolated(unsafe) var appActivationObservers: [NSObjectProtocol] = []
+
+    private func observeAppActivation() {
+        let center = NotificationCenter.default
+        // `queue: .main` already guarantees this block runs on the main thread;
+        // `assumeIsolated` asserts that to the type-checker without a `Task`
+        // allocation + extra run-loop hop on every app activation change.
+        let handler: @Sendable (Notification) -> Void = { [weak self] _ in
+            MainActor.assumeIsolated { self?.updateActivityFocusState() }
+        }
+        appActivationObservers = [
+            center.addObserver(forName: NSApplication.didBecomeActiveNotification,
+                               object: nil, queue: .main, using: handler),
+            center.addObserver(forName: NSApplication.didResignActiveNotification,
+                               object: nil, queue: .main, using: handler),
+        ]
+    }
+
+    /// Recomputes the reducer's `becameActiveAndVisible` / `resignedActiveOrHidden`
+    /// suppression flag (ADR 007, decision 3) from the three inputs that can
+    /// change it: which terminal is focused (`isActive`), whether this one is
+    /// culled (`isHidden`), and whether Mosaic is the frontmost app
+    /// (`NSApp.isActive`). Called whenever any of the three changes; idempotent
+    /// like every other reducer input, so redundant calls (e.g. every terminal
+    /// hearing the same app-activation notification) are harmless.
+    private func updateActivityFocusState() {
+        if isActive, !isHidden, NSApp.isActive {
+            reduceActivity(.becameActiveAndVisible)
+        } else {
+            reduceActivity(.resignedActiveOrHidden)
+        }
+    }
+
+    // MARK: - Activity: reducer plumbing
+
+    /// Feed `event` into the attention reducer, firing `onActivityChange` only
+    /// when `activityState` actually flips.
+    @discardableResult
+    private func reduceActivity(_ event: ActivityEvent) -> ActivityState {
+        let previous = activity.state
+        let next = activity.reduce(event)
+        if next != previous {
+            onActivityChange?()
+        }
+        return next
+    }
+
+    /// Called from `InterceptingTerminalView.dataReceived(slice:)` on every
+    /// output burst.
+    func recordOutputActivity(at time: TimeInterval) {
+        reduceActivity(.outputActivity(at: time))
+        rescheduleSilenceDebounce()
+    }
+
+    /// Called from `InterceptingTerminalView.send(source:data:)` for bytes the
+    /// user typed directly at this terminal.
+    func recordKeystroke() {
+        reduceActivity(.userKeystroke)
+    }
+
+    // MARK: - Activity: silence debounce
+    //
+    // ADR 007, decision 5: the busy→quiet and idle→attention transitions depend
+    // on the *absence* of output, so this mirrors the `redrawWatchdog` idiom
+    // below — a single cancellable `DispatchSourceTimer`, rescheduled on every
+    // output burst rather than recreated, so a quiet terminal never allocates a
+    // new timer and a busy one never leaves a stale deadline pending. A bare
+    // `asyncAfter` is deliberately not used: it returns no handle, so an earlier
+    // burst's callback can't be invalidated when a later burst reschedules.
+    private var silenceDebounce: DispatchSourceTimer?
+
+    private func startSilenceDebounce() {
+        let t = DispatchSource.makeTimerSource(queue: .main)
+        // No output has arrived yet — leave it with nothing pending until the
+        // first burst calls rescheduleSilenceDebounce().
+        t.schedule(deadline: .distantFuture)
+        t.setEventHandler { [weak self] in
+            self?.reduceActivity(.quietElapsed(at: ProcessInfo.processInfo.systemUptime))
+        }
+        t.resume()
+        silenceDebounce = t
+    }
+
+    /// Push the "went quiet" deadline `TerminalActivityModel.quietThreshold`
+    /// seconds out from now. Rescheduling an already-resumed timer source (as
+    /// opposed to cancel + recreate) is supported by GCD and keeps this cheap
+    /// enough to call on every output burst.
+    private func rescheduleSilenceDebounce() {
+        silenceDebounce?.schedule(deadline: .now() + TerminalActivityModel.quietThreshold)
+    }
+
     private func setup() {
         wantsLayer = true
         layer?.cornerRadius = 8
@@ -810,6 +981,7 @@ final class TerminalWindowView: NSView {
         layer?.borderWidth = 1
         layer?.backgroundColor = Theme.dark.terminalBackground.cgColor
 
+        observeAppActivation()
         setupTitleBar()
         setupTerminal()
         setupResizeHandles()
@@ -882,6 +1054,7 @@ final class TerminalWindowView: NSView {
             guard self.bellCount < 10 else { return }
             self.bellCount += 1
             self.onBell?()
+            self.reduceActivity(.bell)
         }
         termView.nativeForegroundColor = theme.terminalForeground
         termView.nativeBackgroundColor = theme.terminalBackground
@@ -902,6 +1075,7 @@ final class TerminalWindowView: NSView {
         registerOSCHandlers()
         Self.installSharedMonitors()
         startRedrawWatchdog()
+        startSilenceDebounce()
 
         startProcess()
     }
@@ -911,9 +1085,23 @@ final class TerminalWindowView: NSView {
     private func registerOSCHandlers() {
         let terminal = termView.getTerminal()
 
-        // OSC 9 — NOT overridden. SwiftTerm handles OSC 9;4 (progress bar) natively
-        // and oscProgressReport is internal. Plain OSC 9 notifications are rare;
-        // Claude Code uses BEL and OSC 777 instead.
+        // OSC 9 — the iTerm2/Growl desktop-notification convention (distinct from
+        // SwiftTerm's native OSC 9;4 ConEmu/Windows-Terminal *progress* protocol).
+        // Registering a user handler here replaces SwiftTerm's entire built-in
+        // `case 9` branch, including the progress path — deliberate, and safe:
+        // Mosaic never implements `progressReport`, so that native path is
+        // already a no-op today. See Docs/ADR/008-osc9-notification-override.md.
+        // `9;4;…` payloads are ignored (parseOSC9 returns nil) to preserve that
+        // observable no-op; everything else is a notification message, routed
+        // through the exact OSC 777 hardening below (cap, sanitizer chain, rate
+        // limit) via `emitNotification`.
+        terminal.parser.oscHandlers[9] = { [weak self] data in
+            guard let text = InterceptingTerminalView.decodeOSCPayload(data) else { return }
+            guard let message = InterceptingTerminalView.parseOSC9(text) else { return }
+            Task { @MainActor [weak self] in
+                self?.emitNotification(title: "", body: message)
+            }
+        }
 
         // OSC 777 — notify;title;body
         // SwiftTerm parses this but the delegate is a protocol extension no-op.
@@ -926,30 +1114,10 @@ final class TerminalWindowView: NSView {
         // heap allocation before our cap takes effect. Fixing this requires a
         // SwiftTerm-level change to truncate OSC sequences during parsing.
         terminal.parser.oscHandlers[777] = { [weak self] data in
-            guard data.count <= 8192 else { return }
-            let text = String(bytes: data, encoding: .utf8) ?? ""
+            guard let text = InterceptingTerminalView.decodeOSCPayload(data) else { return }
             guard let parsed = InterceptingTerminalView.parseOSC777(text) else { return }
-            // Chain sanitizeForClipboard before sanitizeNotificationText to also
-            // strip bidi overrides (U+202A–U+202E, U+2066–U+2069), zero-width
-            // chars, and U+2028/U+2029. setTerminalTitle uses the same chain;
-            // OSC 777 forwards to UNUserNotificationCenter and should match.
-            let title = InterceptingTerminalView.sanitizeNotificationText(
-                InterceptingTerminalView.sanitizeForClipboard(parsed.title), max: 128)
-            let body = InterceptingTerminalView.sanitizeNotificationText(
-                InterceptingTerminalView.sanitizeForClipboard(parsed.body),  max: 512)
             Task { @MainActor [weak self] in
-                guard let self else { return }
-                // Rate-limit: drop notifications exceeding 10 per minute to prevent
-                // a PTY process from spamming macOS Notification Centre via OSC 777.
-                // Monotonic systemUptime is immune to NTP steps and clock adjustments.
-                let now = ProcessInfo.processInfo.systemUptime
-                if now - self.notificationWindowStart >= 60 {
-                    self.notificationCount = 0
-                    self.notificationWindowStart = now
-                }
-                guard self.notificationCount < 10 else { return }
-                self.notificationCount += 1
-                self.onNotification?(title, body)
+                self?.emitNotification(title: parsed.title, body: parsed.body)
             }
         }
 
@@ -963,13 +1131,44 @@ final class TerminalWindowView: NSView {
         // requires a SwiftTerm-level change to truncate OSC sequences during
         // parsing (same limitation as the OSC 777 handler above).
         terminal.parser.oscHandlers[133] = { [weak self] data in
-            guard data.count <= 8192 else { return }
-            let text = String(bytes: data, encoding: .utf8) ?? ""
+            guard let text = InterceptingTerminalView.decodeOSCPayload(data) else { return }
             guard case .commandFinished(let exit) = InterceptingTerminalView.parseOSC133(text) else { return }
             Task { @MainActor [weak self] in
                 self?.titleBar.setStatus(.finished(exitCode: exit))
+                self?.reduceActivity(.commandFinished(exitCode: exit))
             }
         }
+    }
+
+    /// Sanitize, rate-limit, and forward a notification (title, body) pair to
+    /// `onNotification` and the attention reducer. Shared by the OSC 9 and OSC
+    /// 777 handlers above (Docs/ADR/008-osc9-notification-override.md) so both
+    /// routes get identical hardening — same 8 KB payload cap (applied by the
+    /// caller before this runs), same sanitizeForClipboard → sanitizeNotificationText
+    /// chain, same ≤10/min rate limit — rather than two copies that could drift.
+    /// Always call this on the main actor (OSC handlers hop via `Task { @MainActor }`
+    /// before calling in).
+    private func emitNotification(title rawTitle: String, body rawBody: String) {
+        // Chain sanitizeForClipboard before sanitizeNotificationText to also
+        // strip bidi overrides (U+202A–U+202E, U+2066–U+2069), zero-width
+        // chars, and U+2028/U+2029. setTerminalTitle uses the same chain;
+        // notifications forward to UNUserNotificationCenter and should match.
+        let title = InterceptingTerminalView.sanitizeNotificationText(
+            InterceptingTerminalView.sanitizeForClipboard(rawTitle), max: 128)
+        let body = InterceptingTerminalView.sanitizeNotificationText(
+            InterceptingTerminalView.sanitizeForClipboard(rawBody), max: 512)
+        // Rate-limit: drop notifications exceeding 10 per minute to prevent a PTY
+        // process from spamming macOS Notification Centre via OSC 9 or OSC 777.
+        // Monotonic systemUptime is immune to NTP steps and clock adjustments.
+        let now = ProcessInfo.processInfo.systemUptime
+        if now - notificationWindowStart >= 60 {
+            notificationCount = 0
+            notificationWindowStart = now
+        }
+        guard notificationCount < 10 else { return }
+        notificationCount += 1
+        onNotification?(title, body)
+        reduceActivity(.notification)
     }
 
     /// Bound restored scrollback so a single pathological line (e.g.
@@ -1569,7 +1768,11 @@ final class TerminalWindowView: NSView {
         termView.needsDisplay = true
     }
 
-    deinit { redrawWatchdog?.cancel() }
+    deinit {
+        redrawWatchdog?.cancel()
+        silenceDebounce?.cancel()
+        appActivationObservers.forEach { NotificationCenter.default.removeObserver($0) }
+    }
 
     // MARK: - Input broadcasting
 
@@ -1600,6 +1803,13 @@ final class TerminalWindowView: NSView {
         // ~1M BufferLines across ~70 closed terminals after a multi-day session).
         // `leaks` won't flag it — the memory is reachable, not lost.
         termView.terminate()
+
+        // Stop both per-terminal timers here, deterministically, rather than
+        // relying on deinit: the retain chain described above means dealloc
+        // can be arbitrarily delayed, and a live redraw watchdog or silence
+        // debounce on a closed terminal wastes wakeups for no observer.
+        redrawWatchdog?.cancel()
+        silenceDebounce?.cancel()
     }
 }
 
