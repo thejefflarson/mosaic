@@ -22,9 +22,9 @@ enum ActivityState: Equatable {
 /// `at:` timestamps — the reducer never reads the clock itself, so it stays
 /// deterministic and testable without sleeping.
 enum ActivityEvent {
-    case bell
-    case notification
-    case commandFinished(exitCode: Int?)
+    case bell(at: TimeInterval)
+    case notification(at: TimeInterval)
+    case commandFinished(exitCode: Int?, at: TimeInterval)
     case outputActivity(at: TimeInterval)
     case userKeystroke
     case becameActiveAndVisible
@@ -47,6 +47,14 @@ enum ActivityEvent {
 /// (ADR 007, decision 5) — this type only holds the reduction logic.
 struct TerminalActivityModel {
     private(set) var state: ActivityState = .quiet
+    /// Caller-supplied timestamp (same clock as every other `at:` in this file) of
+    /// the most recent transition into `.needsAttention`; nil while quiet/busy.
+    /// Feeds `WaitingQueue.oldestWaiting` for the "jump to the terminal waiting
+    /// longest" pill/menu command (ADR 007). Set only on the raise edge in
+    /// `raiseAttention` — an exit-code promotion of an already-raised state
+    /// doesn't reset it, so a terminal keeps its place in the FIFO queue — and
+    /// cleared alongside `state` in `clearToQuiet`.
+    private(set) var attentionRaisedAt: TimeInterval?
 
     // MARK: Tunable thresholds
     //
@@ -84,11 +92,11 @@ struct TerminalActivityModel {
     @discardableResult
     mutating func reduce(_ event: ActivityEvent) -> ActivityState {
         switch event {
-        case .bell, .notification:
-            raiseAttention(exitCode: nil)
+        case .bell(let at), .notification(let at):
+            raiseAttention(exitCode: nil, at: at)
 
-        case .commandFinished(let exitCode):
-            raiseAttention(exitCode: exitCode)
+        case .commandFinished(let exitCode, let at):
+            raiseAttention(exitCode: exitCode, at: at)
 
         case .outputActivity(let at):
             recordOutput(at: at)
@@ -125,10 +133,11 @@ struct TerminalActivityModel {
     /// exit code only *promotes* the state — never downgrades it — since OSC 133 D is
     /// a bonus coloring tier that lands after the primary signal (bell/notification/
     /// output-idle) already raised attention with no exit code (ADR 007, decision 4).
-    private mutating func raiseAttention(exitCode: Int?) {
+    private mutating func raiseAttention(exitCode: Int?, at time: TimeInterval) {
         guard !isActiveAndVisible else { return }
         guard case .needsAttention(let existingExitCode) = state else {
             state = .needsAttention(exitCode: exitCode)
+            attentionRaisedAt = time
             return
         }
         if existingExitCode == nil, let exitCode {
@@ -141,6 +150,7 @@ struct TerminalActivityModel {
         busyPeriodStart = nil
         keystrokeDuringBusyPeriod = false
         lastOutputTimestamp = nil
+        attentionRaisedAt = nil
     }
 
     private mutating func recordOutput(at time: TimeInterval) {
@@ -170,7 +180,7 @@ struct TerminalActivityModel {
         // leaves the model in `.quiet` rather than stuck in `.busy`.
         clearToQuiet()
         if qualifies {
-            raiseAttention(exitCode: nil)
+            raiseAttention(exitCode: nil, at: time)
         }
     }
 }
