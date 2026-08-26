@@ -61,6 +61,42 @@ struct TerminalActivityModelTests {
         #expect(model.reduce(.becameActiveAndVisible) == .quiet)
     }
 
+    // MARK: - resignedActiveOrHidden (closes the suppression gap left by JEF-884)
+
+    @Test func resignedActiveOrHiddenAloneIsNoOp() {
+        var model = TerminalActivityModel()
+        #expect(model.reduce(.resignedActiveOrHidden) == .quiet)
+    }
+
+    @Test func suppressionPersistsUntilResigned() {
+        var model = TerminalActivityModel()
+        _ = model.reduce(.becameActiveAndVisible)
+        // Still suppressed: nothing raised the flag back down yet.
+        #expect(model.reduce(.bell) == .quiet)
+        _ = model.reduce(.resignedActiveOrHidden)
+        // Set-then-unset restores ordinary, non-suppressed behavior.
+        #expect(model.reduce(.bell) == .needsAttention(exitCode: nil))
+    }
+
+    @Test func resignedActiveOrHiddenDoesNotClearAlreadyRaisedAttention() {
+        // Losing focus/visibility must not itself clear a pending attention
+        // raised while suppressed was off — only userKeystroke and
+        // becameActiveAndVisible do that (ADR 007, decision 3: attention
+        // persists until the user actually attends).
+        var model = TerminalActivityModel()
+        _ = model.reduce(.bell)
+        #expect(model.reduce(.resignedActiveOrHidden) == .needsAttention(exitCode: nil))
+    }
+
+    @Test func heuristicRaiseWorksAgainAfterResign() {
+        var model = TerminalActivityModel()
+        _ = model.reduce(.becameActiveAndVisible)
+        _ = model.reduce(.resignedActiveOrHidden)
+        #expect(model.reduce(.outputActivity(at: 0)) == .busy)
+        #expect(model.reduce(.outputActivity(at: 15)) == .busy)
+        #expect(model.reduce(.quietElapsed(at: 19)) == .needsAttention(exitCode: nil))
+    }
+
     // MARK: - Idempotence
 
     @Test func repeatedBellsDoNotThrash() {
