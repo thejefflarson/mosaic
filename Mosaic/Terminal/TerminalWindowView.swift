@@ -1588,9 +1588,18 @@ final class TerminalWindowView: NSView {
     }
 
     func terminate() {
-        // SwiftTerm tears down the PTY when the view is deallocated,
-        // but we can signal the process to exit cleanly.
+        // Signal the shell to exit cleanly (lets it flush / run exit traps)...
         termView.send(data: [0x04][...])  // Ctrl-D / EOF
+        // ...then tear down SwiftTerm's PTY plumbing. This call is essential, not
+        // optional: LocalProcessTerminalView.terminate() closes the DispatchIO read
+        // channel and cancels the child-process DispatchSource. Those sources are
+        // reachable from GCD's global registry and strongly retain this view — and
+        // through it the SwiftTerm Terminal, its Buffers, and every scrollback
+        // BufferLine. Without it the terminal never deallocates, so each closed
+        // terminal's entire scrollback stays resident forever (measured: 5 GB of
+        // ~1M BufferLines across ~70 closed terminals after a multi-day session).
+        // `leaks` won't flag it — the memory is reachable, not lost.
+        termView.terminate()
     }
 }
 
