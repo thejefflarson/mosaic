@@ -537,9 +537,16 @@ final class TerminalWindowView: NSView {
     private var activity = TerminalActivityModel()
     var activityState: ActivityState { activity.state }
     /// Fired when `activityState` actually changes (not on every event — many
-    /// events are no-ops, e.g. a bell while already `needsAttention`). No UI
-    /// consumes this yet; a later ticket wires it to the minimap/title-bar.
+    /// events are no-ops, e.g. a bell while already `needsAttention`). Drives the
+    /// minimap dot and, via `TerminalController.onAttentionChange`, the "N
+    /// waiting" pill and `Jump to Waiting Terminal` menu item (ADR 007).
     var onActivityChange: (() -> Void)?
+    /// Monotonic `systemUptime` timestamp this terminal most recently transitioned
+    /// into `.needsAttention`; nil while quiet/busy. Feeds `WaitingQueue.oldestWaiting`
+    /// for the "jump to the terminal waiting longest" pill/menu command (ADR 007).
+    /// Sourced from the reducer itself — see `TerminalActivityModel.attentionRaisedAt`
+    /// for the raise/promote/clear rules.
+    var attentionRaisedAt: TimeInterval? { activity.attentionRaisedAt }
 
     // MARK: - Subviews
 
@@ -1054,7 +1061,7 @@ final class TerminalWindowView: NSView {
             guard self.bellCount < 10 else { return }
             self.bellCount += 1
             self.onBell?()
-            self.reduceActivity(.bell)
+            self.reduceActivity(.bell(at: now))
         }
         termView.nativeForegroundColor = theme.terminalForeground
         termView.nativeBackgroundColor = theme.terminalBackground
@@ -1135,7 +1142,7 @@ final class TerminalWindowView: NSView {
             guard case .commandFinished(let exit) = InterceptingTerminalView.parseOSC133(text) else { return }
             Task { @MainActor [weak self] in
                 self?.titleBar.setStatus(.finished(exitCode: exit))
-                self?.reduceActivity(.commandFinished(exitCode: exit))
+                self?.reduceActivity(.commandFinished(exitCode: exit, at: ProcessInfo.processInfo.systemUptime))
             }
         }
     }
@@ -1168,7 +1175,7 @@ final class TerminalWindowView: NSView {
         guard notificationCount < 10 else { return }
         notificationCount += 1
         onNotification?(title, body)
-        reduceActivity(.notification)
+        reduceActivity(.notification(at: now))
     }
 
     /// Bound restored scrollback so a single pathological line (e.g.

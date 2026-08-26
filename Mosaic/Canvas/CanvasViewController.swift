@@ -35,12 +35,117 @@ private extension CVTimeStamp {
     var timeInterval: CFTimeInterval { CFTimeInterval(videoTime) / CFTimeInterval(videoTimeScale) }
 }
 
+// MARK: - Attention pill
+
+/// "● N waiting" capsule docked above the minimap (ADR 007, decision 2): a sibling
+/// AppKit view — not part of the minimap's rendered `NSImage` (ADR 003 doesn't
+/// apply to it) — that only displays a count and forwards a click. It reads
+/// `TerminalController.waitingCount`/`oldestWaitingTerminal` through its owner and
+/// never holds a reference to any terminal itself.
+private final class AttentionPillView: NSView, HoverCursorProviding {
+    var onClick: (() -> Void)?
+
+    /// Count of terminals waiting for attention. Hidden at zero; otherwise a plain
+    /// text swap (no counter roll-up animation). The pulse only (re)starts on the
+    /// 0 ↔ positive edge — an already-pulsing dot isn't reset by 3 waiting → 4.
+    var count = 0 {
+        didSet {
+            guard count != oldValue else { return }
+            isHidden = count == 0
+            label.stringValue = count == 1 ? "1 waiting" : "\(count) waiting"
+            if (oldValue == 0) != (count == 0) { updatePulse() }
+        }
+    }
+
+    private let dot: NSView = {
+        let v = NSView()
+        v.wantsLayer = true
+        v.layer?.backgroundColor = NSColor.systemOrange.cgColor
+        v.layer?.cornerRadius = 3
+        v.translatesAutoresizingMaskIntoConstraints = false
+        return v
+    }()
+
+    private let label: NSTextField = {
+        let f = NSTextField(labelWithString: "")
+        f.font = NSFont.systemFont(ofSize: 11, weight: .medium)
+        f.textColor = .white
+        f.translatesAutoresizingMaskIntoConstraints = false
+        return f
+    }()
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        setup()
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    private func setup() {
+        wantsLayer = true
+        layer?.backgroundColor = NSColor(white: 0.08, alpha: 0.92).cgColor
+        layer?.borderColor = NSColor(white: 0.3, alpha: 1).cgColor
+        layer?.borderWidth = 1
+        isHidden = true
+        toolTip = "Jump to the terminal waiting longest (⌥⌘J)"
+
+        addSubview(dot)
+        addSubview(label)
+        NSLayoutConstraint.activate([
+            dot.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
+            dot.centerYAnchor.constraint(equalTo: centerYAnchor),
+            dot.widthAnchor.constraint(equalToConstant: 6),
+            dot.heightAnchor.constraint(equalToConstant: 6),
+
+            label.leadingAnchor.constraint(equalTo: dot.trailingAnchor, constant: 6),
+            label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
+            label.topAnchor.constraint(equalTo: topAnchor, constant: 5),
+            label.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -5),
+        ])
+    }
+
+    override func layout() {
+        super.layout()
+        layer?.cornerRadius = bounds.height / 2
+    }
+
+    override func mouseDown(with event: NSEvent) { onClick?() }
+
+    // Conforms to the same hover-cursor handoff the minimap uses (see
+    // `HoverCursorProviding`) so the pointing-hand cursor survives while the
+    // global hover monitor is suppressing leaked hover into terminals beneath it.
+    override func resetCursorRects() { addCursorRect(bounds, cursor: .pointingHand) }
+    func hoverCursor(at localPoint: NSPoint) -> NSCursor? { .pointingHand }
+
+    // MARK: - Pulse
+    //
+    // A single bounded CABasicAnimation opacity loop on the dot, running only
+    // while N > 0 — the pill's one motion channel (minimap dots stay static per
+    // ADR 003; ADR 007 confines "pulse" to the pill and title-bar indicator).
+    // Honors Reduce Motion: a static solid dot when the system setting is on,
+    // rather than an always-on pulse that ignores it.
+    private func updatePulse() {
+        dot.layer?.removeAnimation(forKey: "pulse")
+        dot.layer?.opacity = 1
+        guard count > 0, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
+        let pulse = CABasicAnimation(keyPath: "opacity")
+        pulse.fromValue = 1.0
+        pulse.toValue = 0.35
+        pulse.duration = 0.9
+        pulse.autoreverses = true
+        pulse.repeatCount = .infinity
+        pulse.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        dot.layer?.add(pulse, forKey: "pulse")
+    }
+}
+
 final class CanvasViewController: NSViewController {
 
     // MARK: - Subviews
 
     private let canvasView = CanvasView()
     private let minimapView = MinimapView()
+    private let attentionPill = AttentionPillView()
     private let toolPalette = ToolPaletteView()
     private let fpsLabel: NSTextField = {
         let f = NSTextField(labelWithString: "")
@@ -152,6 +257,11 @@ final class CanvasViewController: NSViewController {
         terminalController.onNotification = { [weak self] tw, title, body in
             self?.handleTerminalNotification(tw, title: title, body: body)
         }
+        terminalController.onAttentionChange = { [weak self] in
+            // Lighter than onChange (ADR 007): just the minimap/pill refresh, no
+            // culling recompute or save-debounce re-arm — attention is runtime-only.
+            self?.updateMinimap()
+        }
         annotationController = AnnotationController(
             canvasView: canvasView,
             undoManager: { [weak self] in self?.undoManager },
@@ -187,6 +297,7 @@ final class CanvasViewController: NSViewController {
         }
         setupCanvas()
         setupMinimap()
+        setupAttentionPill()
         setupToolPalette()
         setupFPSOverlay()
         setupZoomLabel()
@@ -318,6 +429,18 @@ final class CanvasViewController: NSViewController {
         minimapView.onResized = { [weak self] in
             self?.scheduleSave()
         }
+    }
+
+    /// Docks the "N waiting" pill directly above the minimap, right-aligned to its
+    /// trailing edge (ADR 007, decision 2).
+    private func setupAttentionPill() {
+        attentionPill.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(attentionPill)
+        NSLayoutConstraint.activate([
+            attentionPill.trailingAnchor.constraint(equalTo: minimapView.trailingAnchor),
+            attentionPill.bottomAnchor.constraint(equalTo: minimapView.topAnchor, constant: -8),
+        ])
+        attentionPill.onClick = { [weak self] in self?.jumpToWaitingTerminal() }
     }
 
     // MARK: - Zoom label
@@ -757,6 +880,9 @@ final class CanvasViewController: NSViewController {
         minimapView.update(viewport: canvasView.viewport, windows: canvasView.terminalsInZOrder,
                            annotations: annotationController.annotations,
                            focusedWindow: canvasView.activeTerminal)
+        // Same refresh path as the minimap (ADR 007, decision 2) — the pill stays
+        // live without a dedicated poll or a second onChange wiring.
+        attentionPill.count = terminalController.waitingCount
     }
 
     private func updateFocusFollowsCenter() {
@@ -808,6 +934,15 @@ final class CanvasViewController: NSViewController {
     @objc func focusTerminalRight()  { terminalController.focusNearest(.right) }
     @objc func focusTerminalUp()     { terminalController.focusNearest(.up)    }
     @objc func focusTerminalDown()   { terminalController.focusNearest(.down)  }
+
+    /// Pan-and-focus the terminal that's been waiting longest, clearing its
+    /// attention as a side effect (ADR 007). Shared with the attention pill's
+    /// click handler; no-op when nothing is waiting (menu item disables itself
+    /// via `validateMenuItem`).
+    @objc func jumpToWaitingTerminal() {
+        guard let target = terminalController.oldestWaitingTerminal else { return }
+        terminalController.snapViewportToTerminal(target)
+    }
 
     @objc func resetZoom() {
         let center = CGPoint(x: canvasView.bounds.midX, y: canvasView.bounds.midY)
@@ -923,6 +1058,9 @@ extension CanvasViewController: NSMenuItemValidation {
         }
         if menuItem.action == #selector(closeActiveTerminal(_:)) {
             return canvasView.activeTerminal != nil
+        }
+        if menuItem.action == #selector(jumpToWaitingTerminal) {
+            return terminalController.waitingCount > 0
         }
         return true
     }

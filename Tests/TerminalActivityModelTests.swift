@@ -7,31 +7,31 @@ struct TerminalActivityModelTests {
 
     @Test func bellRaisesAttention() {
         var model = TerminalActivityModel()
-        #expect(model.reduce(.bell) == .needsAttention(exitCode: nil))
+        #expect(model.reduce(.bell(at: 0)) == .needsAttention(exitCode: nil))
     }
 
     @Test func notificationRaisesAttention() {
         var model = TerminalActivityModel()
-        #expect(model.reduce(.notification) == .needsAttention(exitCode: nil))
+        #expect(model.reduce(.notification(at: 0)) == .needsAttention(exitCode: nil))
     }
 
     @Test func commandFinishedCarriesExitCodeThrough() {
         var model = TerminalActivityModel()
-        #expect(model.reduce(.commandFinished(exitCode: 1)) == .needsAttention(exitCode: 1))
+        #expect(model.reduce(.commandFinished(exitCode: 1, at: 0)) == .needsAttention(exitCode: 1))
     }
 
     @Test func commandFinishedWithoutExitCodeCarriesNilThrough() {
         var model = TerminalActivityModel()
-        #expect(model.reduce(.commandFinished(exitCode: nil)) == .needsAttention(exitCode: nil))
+        #expect(model.reduce(.commandFinished(exitCode: nil, at: 0)) == .needsAttention(exitCode: nil))
     }
 
     @Test func nonzeroZeroAndNilExitAreAllDistinguished() {
         var nonzero = TerminalActivityModel()
         var zero = TerminalActivityModel()
         var noExit = TerminalActivityModel()
-        _ = nonzero.reduce(.commandFinished(exitCode: 1))
-        _ = zero.reduce(.commandFinished(exitCode: 0))
-        _ = noExit.reduce(.commandFinished(exitCode: nil))
+        _ = nonzero.reduce(.commandFinished(exitCode: 1, at: 0))
+        _ = zero.reduce(.commandFinished(exitCode: 0, at: 0))
+        _ = noExit.reduce(.commandFinished(exitCode: nil, at: 0))
         #expect(nonzero.state != zero.state)
         #expect(zero.state != noExit.state)
         #expect(nonzero.state != noExit.state)
@@ -42,22 +42,22 @@ struct TerminalActivityModelTests {
     @Test func suppressedWhileActiveAndVisible() {
         var model = TerminalActivityModel()
         _ = model.reduce(.becameActiveAndVisible)
-        #expect(model.reduce(.bell) == .quiet)
-        #expect(model.reduce(.notification) == .quiet)
-        #expect(model.reduce(.commandFinished(exitCode: 1)) == .quiet)
+        #expect(model.reduce(.bell(at: 0)) == .quiet)
+        #expect(model.reduce(.notification(at: 0)) == .quiet)
+        #expect(model.reduce(.commandFinished(exitCode: 1, at: 0)) == .quiet)
     }
 
     // MARK: - Clearing
 
     @Test func userKeystrokeClearsAttention() {
         var model = TerminalActivityModel()
-        _ = model.reduce(.bell)
+        _ = model.reduce(.bell(at: 0))
         #expect(model.reduce(.userKeystroke) == .quiet)
     }
 
     @Test func becameActiveAndVisibleClearsAttention() {
         var model = TerminalActivityModel()
-        _ = model.reduce(.notification)
+        _ = model.reduce(.notification(at: 0))
         #expect(model.reduce(.becameActiveAndVisible) == .quiet)
     }
 
@@ -72,10 +72,10 @@ struct TerminalActivityModelTests {
         var model = TerminalActivityModel()
         _ = model.reduce(.becameActiveAndVisible)
         // Still suppressed: nothing raised the flag back down yet.
-        #expect(model.reduce(.bell) == .quiet)
+        #expect(model.reduce(.bell(at: 0)) == .quiet)
         _ = model.reduce(.resignedActiveOrHidden)
         // Set-then-unset restores ordinary, non-suppressed behavior.
-        #expect(model.reduce(.bell) == .needsAttention(exitCode: nil))
+        #expect(model.reduce(.bell(at: 1)) == .needsAttention(exitCode: nil))
     }
 
     @Test func resignedActiveOrHiddenDoesNotClearAlreadyRaisedAttention() {
@@ -84,7 +84,7 @@ struct TerminalActivityModelTests {
         // becameActiveAndVisible do that (ADR 007, decision 3: attention
         // persists until the user actually attends).
         var model = TerminalActivityModel()
-        _ = model.reduce(.bell)
+        _ = model.reduce(.bell(at: 0))
         #expect(model.reduce(.resignedActiveOrHidden) == .needsAttention(exitCode: nil))
     }
 
@@ -101,9 +101,9 @@ struct TerminalActivityModelTests {
 
     @Test func repeatedBellsDoNotThrash() {
         var model = TerminalActivityModel()
-        #expect(model.reduce(.bell) == .needsAttention(exitCode: nil))
-        #expect(model.reduce(.bell) == .needsAttention(exitCode: nil))
-        #expect(model.reduce(.bell) == .needsAttention(exitCode: nil))
+        #expect(model.reduce(.bell(at: 0)) == .needsAttention(exitCode: nil))
+        #expect(model.reduce(.bell(at: 1)) == .needsAttention(exitCode: nil))
+        #expect(model.reduce(.bell(at: 2)) == .needsAttention(exitCode: nil))
     }
 
     @Test func laterExitCodePromotesExistingAttention() {
@@ -111,16 +111,63 @@ struct TerminalActivityModelTests {
         // Bell/notification/heuristic raises land before the shell reports an exit
         // code; OSC 133 D is a bonus coloring tier that arrives after (ADR 007,
         // decision 4) and should promote the already-raised state, not be discarded.
-        _ = model.reduce(.bell)
-        #expect(model.reduce(.commandFinished(exitCode: 1)) == .needsAttention(exitCode: 1))
+        _ = model.reduce(.bell(at: 0))
+        #expect(model.reduce(.commandFinished(exitCode: 1, at: 1)) == .needsAttention(exitCode: 1))
     }
 
     @Test func laterNilExitDoesNotDowngradeKnownExitCode() {
         var model = TerminalActivityModel()
-        _ = model.reduce(.commandFinished(exitCode: 1))
+        _ = model.reduce(.commandFinished(exitCode: 1, at: 0))
         // A stray bell (or repeat) after the real exit code is known must not clobber
         // it back to nil.
-        #expect(model.reduce(.bell) == .needsAttention(exitCode: 1))
+        #expect(model.reduce(.bell(at: 1)) == .needsAttention(exitCode: 1))
+    }
+
+    // MARK: - attentionRaisedAt (ADR 007's FIFO "jump to next waiting" ordering)
+
+    @Test func attentionRaisedAtIsNilWhileQuietOrBusy() {
+        var model = TerminalActivityModel()
+        #expect(model.attentionRaisedAt == nil)
+        _ = model.reduce(.outputActivity(at: 0))
+        #expect(model.state == .busy)
+        #expect(model.attentionRaisedAt == nil)
+    }
+
+    @Test func attentionRaisedAtStampsTheRaisingEventsTimestamp() {
+        var model = TerminalActivityModel()
+        _ = model.reduce(.bell(at: 42))
+        #expect(model.attentionRaisedAt == 42)
+    }
+
+    @Test func exitCodePromotionDoesNotResetAttentionRaisedAt() {
+        // The FIFO order must reflect when attention first became pending, not when
+        // OSC 133 D's bonus exit-code coloring happened to arrive (ADR 007, decision 4).
+        var model = TerminalActivityModel()
+        _ = model.reduce(.bell(at: 10))
+        _ = model.reduce(.commandFinished(exitCode: 1, at: 99))
+        #expect(model.attentionRaisedAt == 10)
+    }
+
+    @Test func repeatedRaisesDoNotAdvanceAttentionRaisedAt() {
+        var model = TerminalActivityModel()
+        _ = model.reduce(.bell(at: 5))
+        _ = model.reduce(.bell(at: 500))
+        #expect(model.attentionRaisedAt == 5)
+    }
+
+    @Test func clearingAttentionNilsOutAttentionRaisedAt() {
+        var model = TerminalActivityModel()
+        _ = model.reduce(.bell(at: 5))
+        _ = model.reduce(.userKeystroke)
+        #expect(model.attentionRaisedAt == nil)
+    }
+
+    @Test func heuristicRaiseStampsAttentionRaisedAtAtTheQuietElapsedTime() {
+        var model = TerminalActivityModel()
+        _ = model.reduce(.outputActivity(at: 0))
+        _ = model.reduce(.outputActivity(at: 15))
+        _ = model.reduce(.quietElapsed(at: 19))
+        #expect(model.attentionRaisedAt == 19)
     }
 
     // MARK: - Output-idle heuristic
@@ -164,7 +211,7 @@ struct TerminalActivityModelTests {
 
     @Test func outputActivityDoesNotDisturbExistingAttention() {
         var model = TerminalActivityModel()
-        _ = model.reduce(.bell)
+        _ = model.reduce(.bell(at: 0))
         #expect(model.reduce(.outputActivity(at: 0)) == .needsAttention(exitCode: nil))
     }
 
