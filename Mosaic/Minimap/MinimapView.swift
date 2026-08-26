@@ -59,6 +59,57 @@ final class MinimapView: FlippedView, HoverCursorProviding {
         layer?.borderWidth = 1
     }
 
+    // MARK: - Status dots (ADR 007)
+
+    /// What kind of status dot `ActivityState` maps to, independent of color — a pure,
+    /// testable classification. `renderSnapshot()` maps this to an actual `NSColor`
+    /// (busy needs the terminal's theme foreground, which this type doesn't know).
+    enum StatusDotKind: Equatable {
+        case none
+        case busy
+        case waiting
+        case error
+    }
+
+    /// Pure state→dot-kind mapping (ADR 007's fixed semantic palette): `quiet` draws
+    /// nothing, `busy` dims, `needsAttention` is waiting (amber) unless it carries a
+    /// nonzero exit code, which promotes it to error (red).
+    static func statusDotKind(for state: ActivityState) -> StatusDotKind {
+        switch state {
+        case .quiet:
+            return .none
+        case .busy:
+            return .busy
+        case .needsAttention(let exitCode):
+            if let exitCode, exitCode != 0 {
+                return .error
+            }
+            return .waiting
+        }
+    }
+
+    /// Pure color + size spec for a rect's status dot, or `nil` to draw nothing —
+    /// `renderSnapshot()` just turns this into `NSBezierPath` fills. Size follows
+    /// `rectW*0.09 × rectH*0.13` clamped to `2.5...5`pt (design pass, JEF-886): the
+    /// 2.5pt floor is a hard minimum so the load-bearing waiting/error dot never
+    /// vanishes, but `busy` is decorative dimming and simply drops out below that
+    /// floor instead of being force-clamped up on tiny rects.
+    static func statusDotSpec(for state: ActivityState, rectSize: CGSize,
+                              foreground: NSColor) -> (color: NSColor, diameter: CGFloat)? {
+        let rawDiameter = min(rectSize.width * 0.09, rectSize.height * 0.13)
+        switch statusDotKind(for: state) {
+        case .none:
+            return nil
+        case .busy:
+            guard rawDiameter >= 2.5 else { return nil }
+            return (foreground.withAlphaComponent(0.35), rawDiameter.clamped(to: 2.5...5))
+        case .waiting:
+            return (.systemOrange, rawDiameter.clamped(to: 2.5...5))
+        case .error:
+            return (.systemRed, rawDiameter.clamped(to: 2.5...5))
+        }
+    }
+
     /// Flash a terminal's minimap representation briefly.
     /// Bypasses the render throttle so the flash is visible immediately.
     func flashTerminal(id: UUID, color: NSColor = .systemGreen) {
@@ -155,7 +206,8 @@ final class MinimapView: FlippedView, HoverCursorProviding {
             isActive: $0.id == focusedID,
             flashColor: flashing[$0.id],
             bgColor: $0.theme.terminalBackground,
-            fgColor: $0.theme.terminalForeground
+            fgColor: $0.theme.terminalForeground,
+            activityState: $0.activityState
         ) }
 
         // Compose the minimap image using simple shapes — no layer.render() calls
@@ -192,12 +244,41 @@ final class MinimapView: FlippedView, HoverCursorProviding {
                 wf.bgColor.setFill()
                 let bodyPath = NSBezierPath(roundedRect: dest, xRadius: 2, yRadius: 2)
                 bodyPath.fill()
-                // Close dot — small red circle top-left, like macOS traffic lights
+
+                // Status dot (ADR 007) — top-right, drawn before the close dot so the
+                // degradation rule ("attention dot wins over the decorative close dot"
+                // when a rect can't seat both) only has to skip the close dot below.
+                var statusDotMinX: CGFloat?
+                if let spec = Self.statusDotSpec(for: wf.activityState, rectSize: dest.size,
+                                                 foreground: wf.fgColor) {
+                    let statusRect = NSRect(
+                        x: dest.maxX - spec.diameter * 1.8,
+                        y: dest.minY + spec.diameter * 0.8,
+                        width: spec.diameter, height: spec.diameter
+                    )
+                    statusDotMinX = statusRect.minX
+                    // Static contrast halo (no pulse — ADR 003 forbids per-frame
+                    // minimap work); reuses the isPerceivedDark pattern below.
+                    let haloWidth: CGFloat = spec.diameter >= 4 ? 1.0 : 0.5
+                    NSColor(white: wf.bgColor.isPerceivedDark ? 1.0 : 0.0, alpha: 0.85).setStroke()
+                    let halo = NSBezierPath(ovalIn: statusRect.insetBy(dx: -haloWidth, dy: -haloWidth))
+                    halo.lineWidth = haloWidth
+                    halo.stroke()
+                    spec.color.setFill()
+                    NSBezierPath(ovalIn: statusRect).fill()
+                }
+
+                // Close dot — small red circle top-left, like macOS traffic lights.
+                // Skipped when it would collide with the status dot (the attention
+                // signal wins the space; the close dot is purely decorative).
                 let dotD = min(dest.width * 0.06, dest.height * 0.09).clamped(to: 1.5...3.5)
                 let dotX = dest.minX + dotD * 0.8
                 let dotY = dest.minY + dotD * 0.8
-                NSColor(red: 0.9, green: 0.3, blue: 0.3, alpha: 0.9).setFill()
-                NSBezierPath(ovalIn: NSRect(x: dotX, y: dotY, width: dotD, height: dotD)).fill()
+                let collidesWithStatusDot = statusDotMinX.map { dotX + dotD > $0 } ?? false
+                if !collidesWithStatusDot {
+                    NSColor(red: 0.9, green: 0.3, blue: 0.3, alpha: 0.9).setFill()
+                    NSBezierPath(ovalIn: NSRect(x: dotX, y: dotY, width: dotD, height: dotD)).fill()
+                }
                 // Border — flash color when flashing, bright for focused, subtle otherwise
                 if let flash = wf.flashColor {
                     bodyPath.lineWidth = 2.0
