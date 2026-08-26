@@ -252,6 +252,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
 
         windowMenu.addItem(NSMenuItem.separator())
+        // ADR 007: routes to the terminal that's been waiting longest (FIFO).
+        let jumpToWaitingItem = NSMenuItem(
+            title: "Jump to Waiting Terminal",
+            action: #selector(CanvasViewController.jumpToWaitingTerminal),
+            keyEquivalent: "j")
+        jumpToWaitingItem.keyEquivalentModifierMask = [.command, .option]
+        windowMenu.addItem(jumpToWaitingItem)
+
+        windowMenu.addItem(NSMenuItem.separator())
         windowMenu.addItem(withTitle: "Bring All to Front",
                            action: #selector(NSApplication.arrangeInFront(_:)),
                            keyEquivalent: "")
