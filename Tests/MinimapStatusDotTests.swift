@@ -50,36 +50,26 @@ struct MinimapStatusDotTests {
         #expect(spec?.color == .systemRed)
     }
 
-    @Test func busySpecDimsTheForegroundColor() {
-        let spec = MinimapView.statusDotSpec(for: .busy, rectSize: largeRect, foreground: fg)
-        #expect(spec?.color.alphaComponent == 0.35)
+    @Test func busySpecIsNil() {
+        // Busy is no longer surfaced on the minimap (distracting); only attention shows.
+        #expect(MinimapView.statusDotSpec(for: .busy, rectSize: largeRect, foreground: fg) == nil)
     }
 
-    // MARK: - statusDotSpec: size clamping
+    // MARK: - statusDotSpec: uniform size
 
-    @Test func sizeClampsToUpperBoundOnLargeRects() {
-        let spec = MinimapView.statusDotSpec(for: .needsAttention(exitCode: nil),
-                                             rectSize: CGSize(width: 1000, height: 1000), foreground: fg)
-        #expect(spec?.diameter == 5)
+    @Test func statusDotIsUniformSizeRegardlessOfRect() {
+        let big = MinimapView.statusDotSpec(for: .needsAttention(exitCode: nil),
+                                            rectSize: CGSize(width: 1000, height: 1000), foreground: fg)
+        let small = MinimapView.statusDotSpec(for: .needsAttention(exitCode: nil),
+                                              rectSize: CGSize(width: 8, height: 8), foreground: fg)
+        #expect(big?.diameter == MinimapView.statusDotDiameter)
+        #expect(small?.diameter == MinimapView.statusDotDiameter)
     }
 
-    @Test func waitingAndErrorHitTheHardFloorOnTinyRects() {
-        // Even a near-zero rect must still seat the waiting/error dot (ADR 007 /
-        // JEF-886: this is the load-bearing signal and must never vanish).
+    @Test func waitingAndErrorNeverVanish() {
+        // The load-bearing signal must still draw even on a near-zero rect (ADR 007).
         let tiny = CGSize(width: 1, height: 1)
-        let waiting = MinimapView.statusDotSpec(for: .needsAttention(exitCode: nil), rectSize: tiny, foreground: fg)
-        let error = MinimapView.statusDotSpec(for: .needsAttention(exitCode: 1), rectSize: tiny, foreground: fg)
-        #expect(waiting?.diameter == 2.5)
-        #expect(error?.diameter == 2.5)
-    }
-
-    @Test func busyDropsOutOnTinyRectsInsteadOfBeingClampedUp() {
-        let tiny = CGSize(width: 1, height: 1)
-        #expect(MinimapView.statusDotSpec(for: .busy, rectSize: tiny, foreground: fg) == nil)
-    }
-
-    @Test func busyRendersOnRectsAboveTheDropoutThreshold() {
-        let spec = MinimapView.statusDotSpec(for: .busy, rectSize: largeRect, foreground: fg)
-        #expect(spec != nil)
+        #expect(MinimapView.statusDotSpec(for: .needsAttention(exitCode: nil), rectSize: tiny, foreground: fg) != nil)
+        #expect(MinimapView.statusDotSpec(for: .needsAttention(exitCode: 1), rectSize: tiny, foreground: fg) != nil)
     }
 }

@@ -947,6 +947,13 @@ final class TerminalWindowView: NSView {
     func recordOutputActivity(at time: TimeInterval) {
         reduceActivity(.outputActivity(at: time))
         rescheduleSilenceDebounce()
+        // Screen-scrape the agent's state at most ~1×/s while output flows, so we know
+        // it was working when the turn later goes quiet (the done-edge is resolved on
+        // the settled-output timer below).
+        if time - lastAgentClassify >= 1 {
+            lastAgentClassify = time
+            driveAgentActivity(quietElapsed: false)
+        }
     }
 
     /// Called from `InterceptingTerminalView.send(source:data:)` for bytes the
@@ -972,7 +979,11 @@ final class TerminalWindowView: NSView {
         // first burst calls rescheduleSilenceDebounce().
         t.schedule(deadline: .distantFuture)
         t.setEventHandler { [weak self] in
-            self?.reduceActivity(.quietElapsed(at: ProcessInfo.processInfo.systemUptime))
+            guard let self else { return }
+            // Prefer the agent screen-scrape detector (Claude Code / opencode); only
+            // fall back to the generic output-idle heuristic for non-agent terminals.
+            if self.driveAgentActivity(quietElapsed: true) { return }
+            self.reduceActivity(.quietElapsed(at: ProcessInfo.processInfo.systemUptime))
         }
         t.resume()
         silenceDebounce = t
@@ -984,6 +995,62 @@ final class TerminalWindowView: NSView {
     /// enough to call on every output burst.
     private func rescheduleSilenceDebounce() {
         silenceDebounce?.schedule(deadline: .now() + TerminalActivityModel.quietThreshold)
+    }
+
+    // MARK: - Activity: agent screen-scrape detector
+    //
+    // Claude Code and opencode don't reliably emit a machine signal on turn
+    // completion (see Docs/ADR/007 and the research trail), so — like herdr — we read
+    // the bottom of the visible screen and recognize the agent's own UI. The
+    // cross-agent signal is the interrupt affordance ("esc to interrupt"): present ⇒
+    // working; gone after having been working ⇒ turn done. See AgentActivityDetector.
+    private var agentWasWorking = false
+    private var lastAgentClassify: TimeInterval = 0
+
+    /// The bottom `count` rows of the *visible* screen as trimmed strings.
+    private func bottomVisibleLines(_ count: Int) -> [String] {
+        guard let terminal = termView.terminal else { return [] }
+        let rows = terminal.rows
+        var lines: [String] = []
+        for row in max(0, rows - count)..<rows {
+            guard let line = terminal.getLine(row: row) else { continue }
+            lines.append(line.translateToString(
+                trimRight: true,
+                characterProvider: { let c = $0.getCharacter(); return c == "\0" ? " " : c }))
+        }
+        return lines
+    }
+
+    /// Classify the visible screen and drive the reducer. Returns true when this was an
+    /// agent screen we handled (so the caller skips the generic output-idle heuristic).
+    /// The done-edge (working → not working) is resolved only when `quietElapsed` — i.e.
+    /// from the settled-output timer — never mid-output.
+    @discardableResult
+    private func driveAgentActivity(quietElapsed: Bool) -> Bool {
+        let now = ProcessInfo.processInfo.systemUptime
+        switch AgentActivityDetector.classify(bottomVisibleLines(15)) {
+        case .working:
+            agentWasWorking = true
+            if quietElapsed { rescheduleSilenceDebounce() }   // paused mid-turn; keep watching
+            return true
+        case .blocked:
+            agentWasWorking = false
+            reduceActivity(.notification(at: now))            // needs a decision now
+            return true
+        case .idle:
+            if quietElapsed, agentWasWorking {
+                agentWasWorking = false
+                reduceActivity(.notification(at: now))        // turn done → wants you
+            }
+            return true                                       // an agent screen either way
+        case .unknown:
+            if quietElapsed, agentWasWorking {
+                agentWasWorking = false
+                reduceActivity(.notification(at: now))        // was working, now not → done
+                return true
+            }
+            return false                                      // not an agent → generic heuristic
+        }
     }
 
     private func setup() {

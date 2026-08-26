@@ -28,18 +28,12 @@ struct TitleBarViewTests {
 
     // MARK: - busy
 
-    @Test func busyShowsADimForegroundDot() {
-        let view = makeIndicator()
-        view.foregroundColor = .white
-        view.activityState = .busy
-        #expect(!view.isDotHidden)
-        let expected = NSColor.white.withAlphaComponent(0.35).cgColor
-        #expect(view.dotFillColor == expected)
-    }
-
-    @Test func busyDoesNotPulse() {
+    @Test func busyHidesTheDot() {
+        // The title bar surfaces only attention, never busy: a terminal you're looking
+        // at echoes your keystrokes as output, which would paint a dot on every keypress.
         let view = makeIndicator()
         view.activityState = .busy
+        #expect(view.isDotHidden)
         #expect(!view.isPulsing)
     }
 

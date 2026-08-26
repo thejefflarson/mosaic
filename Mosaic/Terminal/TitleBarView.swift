@@ -242,18 +242,19 @@ final class StatusIndicatorView: NSView {
     }
 
     private func updatePath() {
-        let side = min(bounds.width, bounds.height)
-        // Guard against a zero/negative-size rect — `setup()` calls `updateLayers()` (which
-        // computes the path) before this view has ever been laid out, when `bounds` is still
-        // `.zero`; `insetBy(dx: 1, dy: 1)` on that turns negative, and CoreGraphics silently
-        // produces NaN geometry for a degenerate ellipse/triangle rect rather than erroring.
-        guard side > 2 else {
+        // Draw a fixed ~7pt mark centered in the (12pt) indicator rather than filling
+        // the whole bounds — a status dot reads better small.
+        let diameter = min(min(bounds.width, bounds.height) - 2, 7)
+        // Guard against a zero/negative-size rect — `setup()` computes the path before
+        // this view is ever laid out, when `bounds` is still `.zero`; a degenerate rect
+        // makes CoreGraphics silently emit NaN geometry rather than erroring.
+        guard diameter > 2 else {
             dotLayer.path = nil
             return
         }
-        let rect = CGRect(x: (bounds.width - side) / 2,
-                          y: (bounds.height - side) / 2,
-                          width: side, height: side).insetBy(dx: 1, dy: 1)
+        let rect = CGRect(x: (bounds.width - diameter) / 2,
+                          y: (bounds.height - diameter) / 2,
+                          width: diameter, height: diameter)
         dotLayer.path = isErrorTriangle ? Self.trianglePath(in: rect) : CGPath(ellipseIn: rect, transform: nil)
     }
 
@@ -275,12 +276,12 @@ final class StatusIndicatorView: NSView {
 
     private func updateLayers() {
         switch activityState {
-        case .quiet:
+        case .quiet, .busy:
+            // The title bar only surfaces attention the user needs to act on. `busy` is
+            // intentionally NOT shown here: a terminal you're looking at echoes your own
+            // keystrokes as output, which would paint a dot on every keypress. "Which
+            // terminal is working" belongs to the minimap's busy dot, not here.
             dotLayer.isHidden = true
-            stopPulse()
-        case .busy:
-            dotLayer.isHidden = false
-            dotLayer.fillColor = foregroundColor.withAlphaComponent(0.35).cgColor
             stopPulse()
         case .needsAttention:
             dotLayer.isHidden = false
