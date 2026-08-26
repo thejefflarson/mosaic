@@ -88,6 +88,13 @@ private final class AttentionPillView: NSView, HoverCursorProviding {
         layer?.borderWidth = 1
         isHidden = true
         toolTip = "Jump to the terminal waiting longest (⌥⌘J)"
+        setAccessibilityElement(true)
+        setAccessibilityRole(.button)
+        setAccessibilityHelp("Activate to jump to the terminal waiting longest")
+        // Live-update the pulse when the user toggles Reduce Motion mid-session.
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self, selector: #selector(reduceMotionChanged),
+            name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil)
 
         addSubview(dot)
         addSubview(label)
@@ -137,6 +144,22 @@ private final class AttentionPillView: NSView, HoverCursorProviding {
         pulse.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
         dot.layer?.add(pulse, forKey: "pulse")
     }
+
+    @objc private func reduceMotionChanged() { updatePulse() }
+
+    // VoiceOver: the pill reads as a button whose label is the live count and whose
+    // action is the same jump as a click / ⌥⌘J — a complete non-visual route.
+    override func accessibilityLabel() -> String? {
+        count == 1 ? "1 terminal waiting for attention"
+                   : "\(count) terminals waiting for attention"
+    }
+
+    override func accessibilityPerformPress() -> Bool {
+        onClick?()
+        return true
+    }
+
+    deinit { NSWorkspace.shared.notificationCenter.removeObserver(self) }
 }
 
 final class CanvasViewController: NSViewController {
@@ -882,7 +905,13 @@ final class CanvasViewController: NSViewController {
                            focusedWindow: canvasView.activeTerminal)
         // Same refresh path as the minimap (ADR 007, decision 2) — the pill stays
         // live without a dedicated poll or a second onChange wiring.
-        attentionPill.count = terminalController.waitingCount
+        let waiting = terminalController.waitingCount
+        attentionPill.count = waiting
+        // VoiceOver: the minimap's raster dots aren't individually reachable, so speak
+        // the waiting count as the map's value (role stays .image, label "Minimap").
+        minimapView.setAccessibilityValue(
+            waiting == 0 ? "no terminals waiting"
+            : waiting == 1 ? "1 terminal waiting" : "\(waiting) terminals waiting")
     }
 
     private func updateFocusFollowsCenter() {

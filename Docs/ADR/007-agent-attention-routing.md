@@ -87,3 +87,36 @@ sequences Mosaic does not implement.
 - **Global 1 Hz decay poll** — an always-on timer diffing all terminals forever, against the grain
   of the app's event-driven design and the memory/CPU cleanup; replaced by the per-terminal
   debounce.
+
+## Update (2026-08) — turn-completion is detected by screen-scraping, not a signal
+
+**Status:** Accepted. Shipped with the feature.
+
+Dogfooding surfaced that the assumed primary signal doesn't fire reliably. Claude Code does **not**
+ring the terminal bell on turn end by default; its notification is a **~60-second-delayed idle
+ping** whose channel depends on the terminal it detects (ghostty → OSC 777, iTerm2 → OSC 9), so
+in a terminal it doesn't recognize it stays silent. The output-idle heuristic can't stand in for it
+either: a TUI that pauses mid-turn (thinking, running a tool) would false-fire "done."
+
+**Decision:** detect an agent's turn state by **screen-scraping the bottom of the terminal's visible
+buffer** — the approach herdr uses (its "screen manifest"). Mosaic owns the SwiftTerm cell buffer
+directly, so it reads it precisely rather than snapshotting a rendered pane. The load-bearing,
+cross-agent signal is the **interrupt affordance**: both Claude Code and opencode render an
+"esc to interrupt" hint while a turn runs, so its presence means *working* and its disappearance
+(after having been working) means *turn done*. A permission/confirmation prompt ("Do you want to
+proceed?", "esc to cancel") means *blocked*. This lives in the pure, unit-tested
+`AgentActivityDetector` (patterns derived from herdr's published rules) and is driven from the
+per-terminal silence debounce; it takes priority over the generic output-idle heuristic and falls
+back to it for non-agent terminals.
+
+This is the concrete realization of decision 4's extension seam (one classifier, driven by one new
+call site) — **not** a plugin registry. It's a heuristic, not a contract: ~seconds of lag, and the
+patterns track the agents' UIs, so they may need updating when those change (herdr ships them as
+updatable rules; ours are constants in `AgentActivityDetector.swift`).
+
+**Decision 6 stands, reaffirmed.** Advertising `TERM_PROGRAM=iTerm.app` (+ `LC_TERMINAL`) to coax
+Claude Code into emitting OSC 9 was tried and **dropped**: the screen-scrape detector makes it
+unnecessary, and impersonating a terminal we aren't is dishonest and invites emulator-specific
+escape sequences we don't fully support. A `Stop` hook in `~/.claude/settings.json` (emitting
+OSC 777) remains available to a user who wants instant, exact, config-based detection instead of
+the heuristic.

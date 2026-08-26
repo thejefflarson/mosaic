@@ -233,8 +233,16 @@ final class StatusIndicatorView: NSView {
         // own `CATransaction`.
         dotLayer.actions = ["fillColor": NSNull(), "path": NSNull(), "hidden": NSNull(), "opacity": NSNull()]
         layer?.addSublayer(dotLayer)
+        // Live-update the pulse when Reduce Motion is toggled mid-session.
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self, selector: #selector(reduceMotionChanged),
+            name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil)
         updateLayers()
     }
+
+    @objc private func reduceMotionChanged() { updateLayers() }
+
+    deinit { NSWorkspace.shared.notificationCenter.removeObserver(self) }
 
     override func layout() {
         super.layout()
@@ -283,6 +291,7 @@ final class StatusIndicatorView: NSView {
             // terminal is working" belongs to the minimap's busy dot, not here.
             dotLayer.isHidden = true
             stopPulse()
+            setAccessibilityElement(false)
         case .needsAttention:
             dotLayer.isHidden = false
             dotLayer.fillColor = (isErrorTriangle ? NSColor.systemRed : NSColor.systemOrange).cgColor
@@ -290,6 +299,15 @@ final class StatusIndicatorView: NSView {
                 stopPulse()
             } else {
                 startPulse()
+            }
+            // VoiceOver: non-color state via shape (triangle for error) is paired with
+            // an explicit label, so the state is legible without seeing the color.
+            setAccessibilityElement(true)
+            setAccessibilityRole(.image)
+            if case .needsAttention(let code?) = activityState, code != 0 {
+                setAccessibilityLabel("Finished with errors, exit code \(code)")
+            } else {
+                setAccessibilityLabel("Waiting for you")
             }
         }
         updatePath()

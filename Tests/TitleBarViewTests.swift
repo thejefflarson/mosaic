@@ -37,6 +37,28 @@ struct TitleBarViewTests {
         #expect(!view.isPulsing)
     }
 
+    // MARK: - VoiceOver (JEF-889)
+
+    @Test func quietIsNotAnAccessibilityElement() {
+        let view = makeIndicator()
+        view.activityState = .quiet
+        #expect(!view.isAccessibilityElement())
+    }
+
+    @Test func waitingHasVoiceOverLabel() {
+        let view = makeIndicator()
+        view.activityState = .needsAttention(exitCode: nil)
+        #expect(view.isAccessibilityElement())
+        #expect(view.accessibilityLabel() == "Waiting for you")
+    }
+
+    @Test func errorHasExitCodeVoiceOverLabelAndTriangle() {
+        let view = makeIndicator()
+        view.activityState = .needsAttention(exitCode: 2)
+        #expect(view.accessibilityLabel() == "Finished with errors, exit code 2")
+        #expect(view.dotShape == .triangle)   // non-color channel, legible in grayscale
+    }
+
     // MARK: - needsAttention: amber, no exit code / zero exit code
 
     @Test func needsAttentionWithNilExitCodeIsAmber() {
