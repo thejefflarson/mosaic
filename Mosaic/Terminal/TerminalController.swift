@@ -85,6 +85,12 @@ final class TerminalController {
     var onBell: ((TerminalWindowView) -> Void)?
     /// Called on OSC 9/777 notification with (terminal, title, body).
     var onNotification: ((TerminalWindowView, String, String) -> Void)?
+    /// Called when any terminal's `activityState` changes (ADR 007). Deliberately
+    /// separate from `onChange`: attention is runtime-only and never persisted, so
+    /// routing it through `onChange` would re-arm the save debounce and recompute
+    /// culling/selection rings on every raise/promote/clear — none of which
+    /// attention state affects. Wire this to just a minimap/pill refresh.
+    var onAttentionChange: (() -> Void)?
 
     // MARK: - State
 
@@ -211,6 +217,9 @@ final class TerminalController {
             onNotification?(tw, title, body)
         }
 
+        tw.onActivityChange = { [weak self] in
+            self?.onAttentionChange?()
+        }
 
         cv.addTerminal(tw)
         cv.activateTerminal(tw)
@@ -433,4 +442,27 @@ final class TerminalController {
 
     var activeWorkingDirectory: String { canvasView?.activeTerminal?.currentCwd ?? "" }
     var count: Int { manager.windows.count }
+
+    // MARK: - Attention (ADR 007)
+
+    /// Terminals currently waiting for attention — the single source `waitingCount`
+    /// and `oldestWaitingTerminal` both derive from, so the two can't drift apart.
+    private var waitingTerminals: [TerminalWindowView] {
+        windows.filter { $0.attentionRaisedAt != nil }
+    }
+
+    /// Count of terminals currently waiting for attention — drives the "N waiting"
+    /// pill and the Jump to Waiting Terminal menu item's enabled state.
+    var waitingCount: Int { waitingTerminals.count }
+
+    /// The terminal that has been waiting longest, or nil when none are waiting.
+    /// Shared by the attention pill's click handler and the Jump to Waiting
+    /// Terminal menu command — both just call `snapViewportToTerminal` on the
+    /// result, which clears the target's attention as a side effect of focusing it.
+    var oldestWaitingTerminal: TerminalWindowView? {
+        let waiting = waitingTerminals
+        let candidates = waiting.map { WaitingCandidate(id: $0.id, attentionRaisedAt: $0.attentionRaisedAt!) }
+        guard let id = WaitingQueue.oldestWaiting(in: candidates) else { return nil }
+        return waiting.first { $0.id == id }
+    }
 }
