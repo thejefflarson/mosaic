@@ -536,9 +536,11 @@ final class TerminalWindowView: NSView {
 
     private var activity = TerminalActivityModel()
     var activityState: ActivityState { activity.state }
-    /// Fired when `activityState` actually changes (not on every event — many
-    /// events are no-ops, e.g. a bell while already `needsAttention`). No UI
-    /// consumes this yet; a later ticket wires it to the minimap/title-bar.
+    /// Fired on an actual `activityState` flip, for external consumers (e.g. a future
+    /// minimap dot) to assign. The title bar is *not* wired through here: it's a
+    /// single-slot closure, and an external assignment would silently replace rather
+    /// than compose with another — see `reduceActivity` for why the title bar syncs
+    /// directly instead.
     var onActivityChange: (() -> Void)?
 
     // MARK: - Subviews
@@ -917,13 +919,16 @@ final class TerminalWindowView: NSView {
 
     // MARK: - Activity: reducer plumbing
 
-    /// Feed `event` into the attention reducer, firing `onActivityChange` only
-    /// when `activityState` actually flips.
+    /// Feed `event` into the attention reducer. On an actual flip (many events are
+    /// no-ops, e.g. a bell while already `needsAttention`), drives the title-bar dot
+    /// straight from the reducer — no fade timer of its own, see `TitleBarView.setActivity`
+    /// — and fires `onActivityChange` for other consumers (e.g. the minimap).
     @discardableResult
     private func reduceActivity(_ event: ActivityEvent) -> ActivityState {
         let previous = activity.state
         let next = activity.reduce(event)
         if next != previous {
+            titleBar.setActivity(next)
             onActivityChange?()
         }
         return next
@@ -1134,7 +1139,7 @@ final class TerminalWindowView: NSView {
             guard let text = InterceptingTerminalView.decodeOSCPayload(data) else { return }
             guard case .commandFinished(let exit) = InterceptingTerminalView.parseOSC133(text) else { return }
             Task { @MainActor [weak self] in
-                self?.titleBar.setStatus(.finished(exitCode: exit))
+                // Also drives the title-bar dot — see reduceActivity.
                 self?.reduceActivity(.commandFinished(exitCode: exit))
             }
         }
