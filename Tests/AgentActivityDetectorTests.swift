@@ -42,7 +42,20 @@ struct AgentActivityDetectorTests {
     }
 
     @Test func caseInsensitive() {
-        #expect(AgentActivityDetector.classify(["ESC TO INTERRUPT"]) == .working)
+        #expect(AgentActivityDetector.classify(["⏵ WORKING… (ESC TO INTERRUPT)"]) == .working)
         #expect(AgentActivityDetector.classify(["DO YOU WANT TO PROCEED?"]) == .blocked)
+    }
+
+    @Test func staleInterruptTextAboveAnIdlePromptIsIdle() {
+        // The exact bug herdr guards against (and #352): a bare "esc to interrupt"
+        // lingering above a fresh prompt must NOT read as working — only a live,
+        // spinner-prefixed turn line counts. Otherwise the detector gets stuck busy.
+        #expect(AgentActivityDetector.classify(["  · earlier (esc to interrupt) note", "❯ "]) == .idle)
+    }
+
+    @Test func brailleSpinnerLineIsWorking() {
+        // Claude's live status line starts with a braille spinner (herdr's snippet:
+        // "⠋ Baking… (esc to interrupt)").
+        #expect(AgentActivityDetector.classify(["⠋ Baking… (13m 36s · esc to interrupt)"]) == .working)
     }
 }

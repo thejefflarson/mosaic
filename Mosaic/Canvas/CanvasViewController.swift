@@ -919,6 +919,7 @@ final class CanvasViewController: NSViewController {
         // background. NSApp.dockTile needs no entitlement and no notification
         // permission (unlike UNUserNotification badges).
         NSApp.dockTile.badgeLabel = waiting == 0 ? nil : "\(waiting)"
+        NSApp.dockTile.display()   // force a repaint; badgeLabel alone can lag
     }
 
     private func updateFocusFollowsCenter() {

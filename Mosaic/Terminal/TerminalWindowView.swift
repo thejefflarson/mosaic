@@ -1066,7 +1066,10 @@ final class TerminalWindowView: NSView {
             reduceActivity(.notification(at: now))            // needs a decision now
             return true
         case .idle:
-            if quietElapsed, agentWasWorking {
+            // A visible idle prompt means the turn ended — fire the done edge
+            // immediately, even mid-output. Agents keep redrawing while idle (cursor,
+            // status line), so waiting for the silence timer could miss it entirely.
+            if agentWasWorking {
                 agentWasWorking = false
                 reduceActivity(.notification(at: now))        // turn done → wants you
             }
