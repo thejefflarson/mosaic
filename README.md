@@ -137,6 +137,16 @@ Docs/ADR/             # Architecture Decision Records
 - **Image annotations** are saved as PNGs in `~/Library/Application Support/Mosaic/Images/`.
 - Terminal PTY processes are always fresh on launch — only the working directory is restored.
 
+## Acknowledgments
+
+Agent turn-state detection is driven by manifests vendored from
+[herdrdev/herdr](https://github.com/herdrdev/herdr), licensed under the
+Apache License, Version 2.0. See `Vendor/herdr/{LICENSE,NOTICE}` for the
+license text and a statement of changes, and
+`Docs/ADR/009-vendor-herdr-detection-manifests.md` for the vendoring
+approach. `Scripts/update-herdr-manifests.sh` re-vendors a pinned herdr
+commit on demand; no herdr code is fetched or executed at runtime.
+
 ## License
 
 MIT

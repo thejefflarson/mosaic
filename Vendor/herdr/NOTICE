@@ -1,0 +1,10 @@
+Mosaic vendors agent-detection manifests from herdrdev/herdr
+(https://github.com/herdrdev/herdr), licensed under the Apache License,
+Version 2.0. See LICENSE in this directory for the full license text.
+
+Changes from the upstream source: the manifests under manifests/*.toml are
+converted verbatim from TOML to JSON at vendor time
+(Scripts/update-herdr-manifests.sh) — no rule content is altered. The engine
+that evaluates these manifests is an independent Swift implementation written
+against herdr's published manifest-engine semantics; no herdr source code is
+vendored or reused.
