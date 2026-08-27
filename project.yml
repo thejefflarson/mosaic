@@ -54,6 +54,28 @@ targets:
       - path: Mosaic
         excludes:
           - Resources/Info.plist
+          # Given its own source entry below (type: folder) so it lands as a
+          # single AgentManifests/ directory in Resources, not flattened.
+          - Resources/AgentManifests
+      - path: Mosaic/Resources/AgentManifests
+        type: folder
+      # Vendor/ is outside Mosaic/, so these need their own source entries.
+      # Bundled under herdr/ (not the bundle root) so LICENSE/NOTICE don't
+      # collide with any bundle-root file of the same name. Docs/ADR/009 pins
+      # this path — the manifest engine's loader (JEF-899) must match it:
+      # Mosaic.app/Contents/Resources/herdr/{LICENSE,NOTICE}.
+      - path: Vendor/herdr/LICENSE
+        type: file
+        buildPhase:
+          copyFiles:
+            destination: resources
+            subpath: herdr
+      - path: Vendor/herdr/NOTICE
+        type: file
+        buildPhase:
+          copyFiles:
+            destination: resources
+            subpath: herdr
     resources:
       - path: Mosaic/Resources/Assets.xcassets
       - path: Mosaic/App/Mosaic.sdef
