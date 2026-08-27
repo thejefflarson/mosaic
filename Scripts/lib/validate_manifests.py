@@ -163,7 +163,9 @@ def _validate_rule(rule: object, min_engine: int, complexity: dict[str, int]) ->
         if rule.get("visible_idle") or rule.get("visible_blocker") or rule.get("visible_working"):
             raise ValidationError(f"rule {rule_id} skip_state_update cannot set visible flags")
 
-    _validate_gate(f"rule {rule_id}", rule, require_positive=True, depth=0, complexity=complexity)
+    _validate_gate(
+        f"rule {rule_id}", rule, require_positive=True, depth=0, complexity=complexity, is_rule=True
+    )
 
 
 def _validate_gate(
@@ -172,6 +174,7 @@ def _validate_gate(
     require_positive: bool,
     depth: int,
     complexity: dict[str, int],
+    is_rule: bool,
 ) -> None:
     if depth > MAX_GATE_DEPTH:
         raise ValidationError(f"{label} exceeds max gate depth {MAX_GATE_DEPTH}")
@@ -181,7 +184,10 @@ def _validate_gate(
 
     # A top-level rule carries id/state/priority/region/visible_* alongside the
     # gate fields; a nested gate (any/all/not entry) carries only gate fields.
-    allowed_keys = RULE_KEYS if label.startswith("rule ") else GATE_KEYS
+    # Selected from an explicit flag, not a label sniff: nested gates inherit
+    # the parent's "rule <id>" label prefix, so sniffing validated them against
+    # the RULE_KEYS superset and let rule-only keys smuggle through.
+    allowed_keys = RULE_KEYS if is_rule else GATE_KEYS
     unknown = sorted(set(gate) - allowed_keys)
     if unknown:
         raise ValidationError(f"{label} has unknown gate field(s): {', '.join(unknown)}")
@@ -230,7 +236,7 @@ def _validate_nested_gate(
         raise ValidationError(f"{label} must be a table")
     if not require_positive and not _has_any_matcher(gate):
         raise ValidationError(f"{label} must contain a matcher")
-    _validate_gate(label, gate, require_positive, depth, complexity)
+    _validate_gate(label, gate, require_positive, depth, complexity, is_rule=False)
 
 
 def _has_positive_matcher(gate: dict) -> bool:
