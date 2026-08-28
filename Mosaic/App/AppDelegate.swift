@@ -30,11 +30,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     /// Call before posting a UNUserNotification — requests permission the first
     /// time only, and is a no-op thereafter. Safe to call repeatedly.
+    ///
+    /// `.badge` is load-bearing for the dock-icon waiting count, not just the
+    /// notification-center badge: since macOS Monterey, `NSDockTile.badgeLabel`
+    /// is silently suppressed unless the app has requested badge authorization
+    /// (Apple DTS, developer.apple.com/forums/thread/696708). Without `.badge`
+    /// here the dock badge never paints even though `badgeLabel` is set correctly
+    /// (JEF-904). We keep the request lazy — deferred to the first attention
+    /// event rather than front-loaded at launch — because that's the same moment
+    /// the first badge/notification is produced, so nothing that wants the grant
+    /// precedes it by much. On the grant we repaint the tile, so a badge set in
+    /// the brief window before the async grant lands isn't left suppressed.
     static func requestNotificationAuthorizationIfNeeded() {
         guard !notificationAuthorizationRequested else { return }
         notificationAuthorizationRequested = true
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { granted, _ in
-            if !granted {
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { granted, _ in
+            if granted {
+                Task { @MainActor in NSApp.dockTile.display() }
+            } else {
                 NSLog("[Mosaic] notification authorization denied")
             }
         }
