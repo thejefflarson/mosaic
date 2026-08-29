@@ -227,7 +227,19 @@ struct CompiledRegex: @unchecked Sendable {
     var pattern: String { expression.pattern }
 
     init(pattern: String) throws {
-        expression = try NSRegularExpression(pattern: pattern)
+        expression = try NSRegularExpression(pattern: Self.normalizedForICU(pattern))
+    }
+
+    /// herdr authors patterns for Rust's `regex` crate, which spells a code-point
+    /// escape `\u{HHHH}`; ICU (`NSRegularExpression`) rejects that form at compile
+    /// time — it wants `\x{HHHH}` (e.g. hermes.json's `^⚠[\u{fe0e}\u{fe0f}]?…`).
+    /// So ICU is NOT an escape-for-escape superset of Rust's regex (correcting
+    /// ADR-009 decision #5): normalize the one divergence the vendored corpus uses.
+    /// Any *other* incompatible escape still throws from `init` above and is caught
+    /// by the manifest-load test's compile-all gate — a future divergence fails CI
+    /// rather than silently dropping a manifest in the field.
+    private static func normalizedForICU(_ pattern: String) -> String {
+        pattern.replacingOccurrences(of: "\\u{", with: "\\x{")
     }
 }
 

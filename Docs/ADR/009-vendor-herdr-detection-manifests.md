@@ -53,8 +53,13 @@ all attention UI are unchanged.
 5. **Mirror herdr's evaluation semantics exactly.** Gate match: every `contains` a substring
    (lowercased region), every `regex`/`line_regex` matches, every `all` child matches, ≥1 `any` child
    matches when present, no `not` child matches. Highest `priority` wins; file order breaks ties
-   (earlier rule wins — herdr keeps the previous match on `>=`). `NSRegularExpression` (ICU) is a
-   superset of Rust's `regex` (RE2, no lookaround), so current patterns compile. `skip_state_update`
+   (earlier rule wins — herdr keeps the previous match on `>=`). `NSRegularExpression` (ICU) covers
+   Rust's `regex` feature set (RE2, no lookaround) but is **not escape-for-escape compatible**: Rust
+   spells a code-point escape `\u{HHHH}`, which ICU rejects at compile time (it wants `\x{HHHH}`) —
+   `hermes.json` uses exactly this (`^⚠[\u{fe0e}\u{fe0f}]?…`). The loader normalizes `\u{…}`→`\x{…}`
+   at compile time (`CompiledRegex.normalizedForICU`); any *other* escape ICU can't parse throws at
+   load and is caught by the manifest-load compile-all test, so a future divergence fails CI rather
+   than silently dropping a manifest in the field. `skip_state_update`
    rules (transient overlays) hold the last non-skip state per terminal — this also fixes a latent
    bug where the current detector reads Claude's transcript viewer as `unknown`.
 
