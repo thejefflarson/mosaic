@@ -6,13 +6,29 @@ on:
   pull_request:
     branches: [main]
 
+# Least privilege: this workflow only builds and tests — it never writes to the
+# repo, so the default write-capable GITHUB_TOKEN (granted on push) is downgraded
+# to read. Matches the sibling herdr-drift.yml.
+permissions:
+  contents: read
+
 jobs:
   test:
     name: Build & Test
     runs-on: macos-26
+    timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Validate herdr manifests are in sync
+        # Hard-fails on a schema/cap violation in a vendored TOML, or on
+        # Mosaic/Resources/AgentManifests/*.json drifting from what re-deriving it
+        # from Vendor/herdr/manifests/*.toml produces (a hand-edited JSON or a
+        # forgotten re-vendor). See Docs/ADR/009 and the script's own docstring for
+        # why a manifest dropped for exceeding our implemented engine version does
+        # NOT fail this gate. Python 3 is preinstalled on macos runners.
+        run: python3 Scripts/lib/check_manifest_sync.py Vendor/herdr/manifests Mosaic/Resources/AgentManifests
 
       - name: Install xcodegen
         # TODO: pin to a release tarball with a known SHA256 to avoid a compromised

@@ -77,6 +77,20 @@ class ValidationError(Exception):
     """Raised with the first schema or complexity violation found."""
 
 
+class EngineTooNewError(ValidationError):
+    """Raised when a manifest's min_engine_version exceeds what this engine implements.
+
+    A subclass of ValidationError (so existing callers that only catch
+    ValidationError see no behavior change), but distinguishable by callers that need
+    to tell "manifest is malformed" (hard-fail) apart from "manifest is well-formed
+    but targets a not-yet-implemented engine version" (drop with a warning — see
+    Docs/ADR/009-vendor-herdr-detection-manifests.md decision #3). Used by
+    Scripts/lib/check_manifest_sync.py and update-herdr-manifests.sh's --check mode
+    so a routine future re-vendor that drops a v4+ manifest isn't treated as CI-blocking
+    corruption.
+    """
+
+
 def load_toml(path: Path) -> dict:
     try:
         with path.open("rb") as fh:
@@ -102,10 +116,6 @@ def validate_manifest(manifest: dict) -> None:
     min_engine = manifest.get("min_engine_version")
     if not isinstance(min_engine, int) or isinstance(min_engine, bool):
         raise ValidationError("min_engine_version must be an integer")
-    if min_engine > ENGINE_VERSION:
-        raise ValidationError(
-            f"min_engine_version {min_engine} exceeds implemented engine {ENGINE_VERSION}"
-        )
 
     aliases = manifest.get("aliases", [])
     if not isinstance(aliases, list) or not all(isinstance(item, str) for item in aliases):
@@ -120,6 +130,17 @@ def validate_manifest(manifest: dict) -> None:
     complexity = {"gates": 0, "matchers": 0}
     for rule in rules:
         _validate_rule(rule, min_engine, complexity)
+
+    # Raise "engine too new" only after the manifest is otherwise fully valid, so
+    # a distinguishable EngineTooNewError can never mask genuine corruption. A
+    # caller that treats this as a benign skip (check_manifest_sync.py) must be
+    # sure the manifest is well-formed apart from targeting a future engine;
+    # raising earlier would let a malformed too-new manifest slip past its schema
+    # checks as a "drop (expected)".
+    if min_engine > ENGINE_VERSION:
+        raise EngineTooNewError(
+            f"min_engine_version {min_engine} exceeds implemented engine {ENGINE_VERSION}"
+        )
 
 
 def _version_tuple(value: object) -> tuple[int, ...]:

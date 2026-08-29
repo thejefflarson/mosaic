@@ -1,0 +1,46 @@
+name: Herdr Manifest Drift
+
+# Signals when herdrdev/herdr's agent-detection manifests have drifted from what
+# Mosaic has vendored (Docs/ADR/009-vendor-herdr-detection-manifests.md), so a
+# human knows to re-vendor: Scripts/update-herdr-manifests.sh <ref> && xcodegen
+# generate, review the diff, commit, open a PR. A failing run here means upstream
+# changed, not that anything in this repo is broken.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "herdrdev/herdr ref to check against (branch, tag, or SHA)"
+        required: false
+        default: master # herdrdev/herdr's default branch (not "main")
+  schedule:
+    - cron: "0 14 * * 3" # Wednesdays 14:00 UTC
+
+permissions:
+  contents: read
+
+jobs:
+  check-drift:
+    name: Check for herdr manifest drift
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      # --check mode only reads (gh api against the public herdrdev/herdr repo +
+      # local diffing) — no xcodegen, no commit, no push — so this runs on a plain
+      # Linux runner. It fails the job on any diff between the fetched manifests
+      # and Vendor/herdr/manifests + Mosaic/Resources/AgentManifests as currently
+      # committed, including a manifest dropped for exceeding this engine's
+      # implemented min_engine_version (surfaced as a warning line in the log, so
+      # a human knows to extend the engine rather than just re-vendor).
+      - name: Check herdr for drift
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # Passed through env rather than interpolated directly into the run:
+          # script — inputs.ref is caller-controlled text, and substituting it
+          # straight into the script body (rather than via a shell variable)
+          # would let a crafted workflow_dispatch input break out of the
+          # intended command.
+          HERDR_REF: ${{ inputs.ref || 'master' }}
+        run: ./Scripts/update-herdr-manifests.sh --check "$HERDR_REF"
