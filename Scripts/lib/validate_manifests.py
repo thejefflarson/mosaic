@@ -116,10 +116,6 @@ def validate_manifest(manifest: dict) -> None:
     min_engine = manifest.get("min_engine_version")
     if not isinstance(min_engine, int) or isinstance(min_engine, bool):
         raise ValidationError("min_engine_version must be an integer")
-    if min_engine > ENGINE_VERSION:
-        raise EngineTooNewError(
-            f"min_engine_version {min_engine} exceeds implemented engine {ENGINE_VERSION}"
-        )
 
     aliases = manifest.get("aliases", [])
     if not isinstance(aliases, list) or not all(isinstance(item, str) for item in aliases):
@@ -134,6 +130,17 @@ def validate_manifest(manifest: dict) -> None:
     complexity = {"gates": 0, "matchers": 0}
     for rule in rules:
         _validate_rule(rule, min_engine, complexity)
+
+    # Raise "engine too new" only after the manifest is otherwise fully valid, so
+    # a distinguishable EngineTooNewError can never mask genuine corruption. A
+    # caller that treats this as a benign skip (check_manifest_sync.py) must be
+    # sure the manifest is well-formed apart from targeting a future engine;
+    # raising earlier would let a malformed too-new manifest slip past its schema
+    # checks as a "drop (expected)".
+    if min_engine > ENGINE_VERSION:
+        raise EngineTooNewError(
+            f"min_engine_version {min_engine} exceeds implemented engine {ENGINE_VERSION}"
+        )
 
 
 def _version_tuple(value: object) -> tuple[int, ...]:

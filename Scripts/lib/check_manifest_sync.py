@@ -57,7 +57,21 @@ def main(argv: list[str]) -> int:
             manifest = load_toml(toml_path)
             validate_manifest(manifest)
         except EngineTooNewError as exc:
-            print(f"note: {toml_path} dropped (expected) — {exc}", file=sys.stderr)
+            # A manifest above our implemented engine is dropped by the vendor
+            # script (Docs/ADR/009 decision #3), so a *committed* JSON for it is
+            # itself a desync: it means someone hand-edited or forgot to drop the
+            # JSON, and AgentManifest.swift's loader gates on min_engine_version at
+            # load, not on JSON presence — a v3-declaring JSON would still load.
+            # Hard-fail here rather than skipping the sync check entirely; only the
+            # absence of a JSON is the "expected" state for a too-new manifest.
+            if json_path.exists():
+                errors.append(
+                    f"{json_path} exists but {toml_path} exceeds the implemented engine "
+                    f"({exc}) — the vendor script drops the JSON for a too-new manifest; "
+                    "run Scripts/update-herdr-manifests.sh and commit the removal"
+                )
+            else:
+                print(f"note: {toml_path} dropped (expected) — {exc}", file=sys.stderr)
             continue
         except ValidationError as exc:
             errors.append(f"{toml_path}: {exc}")

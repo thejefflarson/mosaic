@@ -6,10 +6,17 @@ on:
   pull_request:
     branches: [main]
 
+# Least privilege: this workflow only builds and tests — it never writes to the
+# repo, so the default write-capable GITHUB_TOKEN (granted on push) is downgraded
+# to read. Matches the sibling herdr-drift.yml.
+permissions:
+  contents: read
+
 jobs:
   test:
     name: Build & Test
     runs-on: macos-26
+    timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
