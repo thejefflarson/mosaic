@@ -9,17 +9,6 @@ import Testing
 /// `Scripts/lib/validate_manifests.py`'s checks so a manifest that would fail
 /// vendor-time validation also fails here, in CI, not in the field.
 struct AgentManifestTests {
-    // Mirrors Scripts/lib/validate_manifests.py's REGION_RE (the engine-v3 region
-    // allow-set, copied from herdr's own checker at the pinned vendor ref).
-    private static let regionPattern =
-        #"^(whole_recent|whole_recent_without_current_prompt_marker|after_last_prompt_marker|"#
-        + #"before_current_prompt_marker|current_prompt_block_marker|after_current_prompt_block_marker|"#
-        + #"prompt_box_body|above_prompt_box|last_non_empty_above_prompt_box|after_last_horizontal_rule|"#
-        + #"osc_title|osc_progress|"#
-        + #"bottom_lines\([1-9][0-9]*\)|bottom_non_empty_lines\([1-9][0-9]*\)|"#
-        + #"top_non_empty_lines\([1-9][0-9]*\))$"#
-    private static let regionRegex = try! NSRegularExpression(pattern: regionPattern)
-
     // Decoded once and shared by every test below (a `Result`, not a bare
     // array, so a genuine decode failure still fails each test individually
     // with its real error — re-parsing the same ~20 bundled files per `@Test`
@@ -51,11 +40,6 @@ struct AgentManifestTests {
         }
     }
 
-    private static func matchesRegionAllowSet(_ region: String) -> Bool {
-        let range = NSRange(region.startIndex..<region.endIndex, in: region)
-        return regionRegex.firstMatch(in: region, options: [], range: range) != nil
-    }
-
     @Test func everyBundledManifestDecodes() throws {
         let manifests = try Self.decodedBundledManifests()
         #expect(!manifests.isEmpty)
@@ -74,10 +58,14 @@ struct AgentManifestTests {
     }
 
     @Test func everyRegionIsInTheEngineV3AllowSet() throws {
+        // `Region` (AgentEngine.swift) is the single source of truth for the
+        // engine-v3 region allow-set — this asserts every bundled rule's raw
+        // `region` string actually parses there, rather than keeping a second,
+        // independently-drifting copy of the name list in this test.
         for manifest in try Self.decodedBundledManifests() {
             for rule in manifest.rules {
                 #expect(
-                    Self.matchesRegionAllowSet(rule.region),
+                    Region(rule.region) != nil,
                     "\(manifest.id)/\(rule.id) has region \"\(rule.region)\" outside the engine-v3 set"
                 )
             }
