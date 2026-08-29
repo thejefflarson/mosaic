@@ -40,7 +40,11 @@ struct AgentManifestTests {
 
     private static func assertCompiles(_ gate: ManifestGate) throws {
         for pattern in gate.regex + gate.lineRegex {
-            _ = try NSRegularExpression(pattern: pattern)
+            // Compile via CompiledRegex, not raw NSRegularExpression — the loader
+            // normalizes Rust `\u{HHHH}` escapes to ICU `\x{HHHH}` before compiling
+            // (see CompiledRegex.normalizedForICU / ADR-009 decision #5), so this must
+            // assert the loader's compile path, not the raw manifest string.
+            _ = try CompiledRegex(pattern: pattern)
         }
         for nested in gate.all + gate.any + gate.not {
             try assertCompiles(nested)
