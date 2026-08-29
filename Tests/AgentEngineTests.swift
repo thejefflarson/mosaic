@@ -36,15 +36,21 @@ struct AgentEngineTests {
     @Test func lineSplittingBreaksOnCRLFNotJustLF() {
         // A PTY can emit CRLF. Swift treats "\r\n" as ONE grapheme, so a
         // Character-based `split(separator: "\n")` would NOT split these lines and
-        // would collapse the whole screen into one "line" — misclassifying, and
-        // handing a huge un-split line to the region slicers. The scalar-based
-        // `splitIntoLines` must yield the SAME region text for CRLF as for LF.
+        // would collapse the whole screen into one "line" — bottom_non_empty_lines(2)
+        // would then return the ENTIRE screen (one non-empty line) instead of the
+        // last two lines. The scalar-based `splitIntoLines` splits CRLF correctly.
+        //
+        // The region *slice* preserves raw bytes, CRs included (herdr's
+        // `slice_from_line_index` returns the raw byte range) — so CRLF's region
+        // text is the LF text with the CRs put back. Stripping them proves the
+        // split happened: the last two non-empty lines, not the whole screen.
         let lf = "marker\nold\n\nmiddle\nmarker\nnew\n"
         let crlf = "marker\r\nold\r\n\r\nmiddle\r\nmarker\r\nnew\r\n"
-        #expect(
-            RegionExtractor.text(forRegion: "bottom_non_empty_lines(2)", screen: crlf, title: "")
-                == RegionExtractor.text(forRegion: "bottom_non_empty_lines(2)", screen: lf, title: "")
-        )
+        let lfRegion = RegionExtractor.text(forRegion: "bottom_non_empty_lines(2)", screen: lf, title: "")
+        let crlfRegion = RegionExtractor.text(forRegion: "bottom_non_empty_lines(2)", screen: crlf, title: "")
+        #expect(lfRegion == "marker\nnew\n")
+        #expect(crlfRegion == "marker\r\nnew\r\n")
+        #expect(crlfRegion.replacingOccurrences(of: "\r", with: "") == lfRegion)
     }
 
     // MARK: - Input cap (DoS guard; NSRegularExpression has no match timeout)
