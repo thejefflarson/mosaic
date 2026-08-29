@@ -243,7 +243,12 @@ struct CompiledRegex: @unchecked Sendable {
     }
 }
 
-/// `ManifestGate`, with `regex`/`lineRegex` compiled.
+/// `ManifestGate`, with `regex`/`lineRegex` compiled and `contains` needles
+/// lowercased once here rather than on every evaluation — mirrors herdr's own
+/// `compile_gate` (`manifest.rs:1191-1195`), which lowercases at compile time
+/// for the same reason `CompiledRegex` compiles patterns at load time (see
+/// above): the needles are fixed once a manifest is loaded, so redoing the
+/// lowercase on every ~1 Hz drive tick buys nothing.
 struct CompiledGate: Sendable {
     let all: [CompiledGate]
     let any: [CompiledGate]
@@ -256,18 +261,33 @@ struct CompiledGate: Sendable {
         all = try gate.all.map(CompiledGate.init)
         any = try gate.any.map(CompiledGate.init)
         not = try gate.not.map(CompiledGate.init)
-        contains = gate.contains
+        contains = gate.contains.map { $0.lowercased() }
         regex = try gate.regex.map(CompiledRegex.init)
         lineRegex = try gate.lineRegex.map(CompiledRegex.init)
     }
 }
 
-/// `ManifestRule`, with its matcher fields compiled into a `CompiledGate`.
+/// Thrown when a rule's `region` string isn't one the engine's `Region` parser
+/// (`AgentEngine.swift`) recognizes. Should never fire for a manifest that
+/// passed vendor-time validation (`Scripts/lib/validate_manifests.py`'s
+/// `REGION_RE` mirrors the same allow-set) — but a compiled rule must fail
+/// loudly here, the same way an uncompilable regex does, rather than resolve
+/// silently to `""` every time the engine evaluates it.
+struct UnrecognizedRegionError: Error, CustomStringConvertible {
+    let region: String
+    var description: String { "unrecognized region \"\(region)\"" }
+}
+
+/// `ManifestRule`, with its matcher fields compiled into a `CompiledGate` and
+/// `region` parsed once into a `Region` — the engine (`AgentEngine.swift`)
+/// looks region names up by rule on every ~1 Hz drive tick, so parsing the raw
+/// string once here (rather than re-parsing it on every evaluation) follows
+/// the same "compile fixed things once" reasoning as `CompiledRegex` above.
 struct CompiledRule: Sendable {
     let id: String
     let state: ManifestState?
     let priority: Int
-    let region: String
+    let region: Region
     let visibleIdle: Bool
     let visibleBlocker: Bool
     let visibleWorking: Bool
@@ -278,7 +298,10 @@ struct CompiledRule: Sendable {
         id = rule.id
         state = rule.state
         priority = rule.priority
-        region = rule.region
+        guard let parsedRegion = Region(rule.region) else {
+            throw UnrecognizedRegionError(region: rule.region)
+        }
+        region = parsedRegion
         visibleIdle = rule.visibleIdle
         visibleBlocker = rule.visibleBlocker
         visibleWorking = rule.visibleWorking
