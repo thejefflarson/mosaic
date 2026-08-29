@@ -31,6 +31,53 @@ struct AgentEngineTests {
         #expect(RegionExtractor.text(forRegion: "top_non_empty_lines(2)", screen: content, title: "") == "\nmarker\nold\n")
     }
 
+    // MARK: - CRLF line splitting (feedback_swift_crlf_split.md regression)
+
+    @Test func lineSplittingBreaksOnCRLFNotJustLF() {
+        // A PTY can emit CRLF. Swift treats "\r\n" as ONE grapheme, so a
+        // Character-based `split(separator: "\n")` would NOT split these lines and
+        // would collapse the whole screen into one "line" — misclassifying, and
+        // handing a huge un-split line to the region slicers. The scalar-based
+        // `splitIntoLines` must yield the SAME region text for CRLF as for LF.
+        let lf = "marker\nold\n\nmiddle\nmarker\nnew\n"
+        let crlf = "marker\r\nold\r\n\r\nmiddle\r\nmarker\r\nnew\r\n"
+        #expect(
+            RegionExtractor.text(forRegion: "bottom_non_empty_lines(2)", screen: crlf, title: "")
+                == RegionExtractor.text(forRegion: "bottom_non_empty_lines(2)", screen: lf, title: "")
+        )
+    }
+
+    // MARK: - Input cap (DoS guard; NSRegularExpression has no match timeout)
+
+    @Test func evaluateCapsScreenAndTitleToABoundedPrefix() throws {
+        // The engine runs backtracking ICU regexes with no match timeout, so it
+        // caps its inputs before evaluating. Evaluating an over-cap screen must
+        // yield EXACTLY the same result as evaluating its capped prefix — proving
+        // the cap is applied (and, since the over-cap call returns promptly here,
+        // that a multi-MB title can't hang the ~1 Hz tick JEF-902 will drive).
+        let claude = try Self.manifest("claude")
+        let box = "──────────────────────────────\n❯ \n──────────────────────────────\n"
+        let huge = box + String(repeating: "x", count: AgentEngine.maxScreenScalars)
+        let cappedPrefix = String(String.UnicodeScalarView(huge.unicodeScalars.prefix(AgentEngine.maxScreenScalars)))
+        let full = AgentEngine.evaluate(manifest: claude, screen: huge, title: "")
+        let onPrefix = AgentEngine.evaluate(manifest: claude, screen: cappedPrefix, title: "")
+        #expect(full == onPrefix)
+    }
+
+    @Test func claudePromptBoxWithCRLFClassifiesLikeLF() throws {
+        // End-to-end proof through the real claude manifest: the idle prompt box,
+        // CRLF-terminated, must classify exactly as its LF twin. If CRLF collapsed
+        // the horizontal-rule lines into one, `prompt_box_body` would find no box
+        // and `live_prompt_box` would not fire — the misclassification the
+        // Character-split bug would cause.
+        let claude = try Self.manifest("claude")
+        let lf = AgentEngine.evaluate(manifest: claude, screen: "──────────────────────────────\n❯ \n──────────────────────────────\n", title: "")
+        let crlf = AgentEngine.evaluate(manifest: claude, screen: "──────────────────────────────\r\n❯ \r\n──────────────────────────────\r\n", title: "")
+        #expect(lf.matchedRuleID == "live_prompt_box")
+        #expect(crlf.activity == lf.activity)
+        #expect(crlf.matchedRuleID == lf.matchedRuleID)
+    }
+
     // MARK: - Gate / priority / line_regex semantics (herdr tests.rs
     // `rule_semantics_apply_gates_priority_and_line_regex`, ported)
 

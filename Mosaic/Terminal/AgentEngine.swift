@@ -93,15 +93,45 @@ enum Region: Hashable, Sendable {
 // not produce a trailing empty line. Shared by the region extractor and the
 // gate evaluator's `line_regex` matcher.
 
-/// Mirrors `str::lines()`. Returned `Substring`s share their `String.Index`
-/// values with `content`, so callers can slice `content` directly from a
-/// line's `startIndex` without separately tracking byte offsets the way
-/// `manifest.rs`'s `line_start_offset` does.
+/// Mirrors Rust's `str::lines()`: split on the `\n` line-feed scalar and strip a
+/// single trailing `\r` off each line. This walks `content.unicodeScalars`, NOT
+/// its `Character` view, on purpose — Swift treats a `\r\n` pair as ONE extended
+/// grapheme cluster, so `split(separator: "\n" as Character)` silently fails to
+/// split CRLF-terminated lines (the exact gotcha in the repo's own memory note
+/// `feedback_swift_crlf_split.md`). A PTY can and does emit CRLF, and this is a
+/// fidelity port where the line boundary IS the match decision, so it must break
+/// on the scalar. A final `\n` produces no trailing empty line (as `str::lines()`).
+///
+/// The returned `Substring`s' `startIndex` values are valid `String.Index`es
+/// into `content` — callers slice `content` directly from a line's `startIndex`
+/// (see `lineStart`), without the byte-offset arithmetic `manifest.rs`'s
+/// `line_start_offset` needs. The scalar the line ends at is a valid slice bound
+/// even mid-`\r\n`, since the next line always starts on a grapheme boundary.
+///
+/// The number of lines is bounded by `content`'s scalar count, which
+/// `AgentEngine.evaluate` caps before any split runs (`maxScreenScalars` /
+/// `maxTitleScalars`), so this cannot be driven pathological by a huge screen.
 private func splitIntoLines(_ content: String) -> [Substring] {
     guard !content.isEmpty else { return [] }
-    var parts = content.split(separator: "\n", omittingEmptySubsequences: false)
-    if content.hasSuffix("\n") { parts.removeLast() }
-    return parts.map { $0.hasSuffix("\r") ? $0.dropLast() : $0 }
+    let scalars = content.unicodeScalars
+    var lines: [Substring] = []
+    var lineStart = content.startIndex
+    var index = content.startIndex
+    while index < content.endIndex {
+        let next = scalars.index(after: index)
+        if scalars[index] == "\n" {
+            var lineEnd = index
+            if lineStart < lineEnd {
+                let beforeNewline = scalars.index(before: lineEnd)
+                if scalars[beforeNewline] == "\r" { lineEnd = beforeNewline }
+            }
+            lines.append(content[lineStart..<lineEnd])
+            lineStart = next
+        }
+        index = next
+    }
+    if lineStart < content.endIndex { lines.append(content[lineStart..<content.endIndex]) }
+    return lines
 }
 
 /// The `String.Index` at which `lines[index]` starts, or `content.endIndex`
@@ -403,7 +433,33 @@ enum AgentEngine {
     /// is idle (`DEFAULT_KNOWN_AGENT_IDLE_FALLBACK`), reserving `.unknown` for
     /// an unrecognized screen with no identified agent at all, which this
     /// function is never handed.
-    static func evaluate(manifest: CompiledManifest, screen: String, title: String) -> AgentEngineMatch {
+    /// Input ceilings, enforced before any regex runs. A terminal screen is
+    /// normally row×col-bounded, but the OSC-2 title is NOT — a program can emit
+    /// a multi-megabyte title string — and `NSRegularExpression` (ICU) has no
+    /// match timeout, so an unbounded region fed to a backtracking pattern is a
+    /// UI-freeze DoS once JEF-902 wires this to the ~1 Hz @MainActor tick. The
+    /// guard is an input cap, not a regex timeout (ICU offers none): cap the
+    /// screen and title to a fixed scalar ceiling here, at the sole evaluation
+    /// chokepoint (`classify` delegates to `evaluate`), so every downstream
+    /// region slice, line split, and regex sees a bounded string by construction.
+    /// The caps are far above any real agent TUI (a full scrollback screen is a
+    /// few KB; a real OSC title, tens of bytes), so truncation only ever clips
+    /// adversarial input, degrading it toward the idle fallback rather than
+    /// hanging. Scalar-count caps bound the UTF-16 length ICU actually walks.
+    static let maxScreenScalars = 64 * 1024
+    static let maxTitleScalars = 4 * 1024
+
+    /// Truncate `text` to at most `limit` Unicode scalars, at a scalar boundary
+    /// (safe for the scalar-based `splitIntoLines` and every `Character`-level
+    /// region helper downstream). Returns `text` unchanged when already within
+    /// the cap, avoiding a copy on the overwhelmingly common small-input path.
+    private static func capped(_ text: String, to limit: Int) -> String {
+        text.unicodeScalars.count <= limit ? text : String(String.UnicodeScalarView(text.unicodeScalars.prefix(limit)))
+    }
+
+    static func evaluate(manifest: CompiledManifest, screen rawScreen: String, title rawTitle: String) -> AgentEngineMatch {
+        let screen = capped(rawScreen, to: maxScreenScalars)
+        let title = capped(rawTitle, to: maxTitleScalars)
         var regionCache: [Region: RegionEvaluation] = [:]
         var best: CompiledRule?
         for rule in manifest.rules {
