@@ -34,3 +34,7 @@ Pods/
 # Local video assets (hosted as release assets, not in git)
 *.mov
 *.mp4
+
+# Python (Scripts/lib/*.py import each other)
+__pycache__/
+*.pyc

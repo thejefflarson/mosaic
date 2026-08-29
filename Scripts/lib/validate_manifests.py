@@ -77,6 +77,20 @@ class ValidationError(Exception):
     """Raised with the first schema or complexity violation found."""
 
 
+class EngineTooNewError(ValidationError):
+    """Raised when a manifest's min_engine_version exceeds what this engine implements.
+
+    A subclass of ValidationError (so existing callers that only catch
+    ValidationError see no behavior change), but distinguishable by callers that need
+    to tell "manifest is malformed" (hard-fail) apart from "manifest is well-formed
+    but targets a not-yet-implemented engine version" (drop with a warning — see
+    Docs/ADR/009-vendor-herdr-detection-manifests.md decision #3). Used by
+    Scripts/lib/check_manifest_sync.py and update-herdr-manifests.sh's --check mode
+    so a routine future re-vendor that drops a v4+ manifest isn't treated as CI-blocking
+    corruption.
+    """
+
+
 def load_toml(path: Path) -> dict:
     try:
         with path.open("rb") as fh:
@@ -103,7 +117,7 @@ def validate_manifest(manifest: dict) -> None:
     if not isinstance(min_engine, int) or isinstance(min_engine, bool):
         raise ValidationError("min_engine_version must be an integer")
     if min_engine > ENGINE_VERSION:
-        raise ValidationError(
+        raise EngineTooNewError(
             f"min_engine_version {min_engine} exceeds implemented engine {ENGINE_VERSION}"
         )
 
