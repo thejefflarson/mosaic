@@ -410,6 +410,15 @@ struct AgentEngineTests {
         #expect(result.activity == .blocked)
     }
 
+    @Test func compactionActivityBulletIsWorking() throws {
+        // herdr bug #352's neighbor: compaction is a live activity-bullet + ellipsis
+        // line (`live_turn_working`'s second alternative), same as any other "✻
+        // Thinking…" turn line — not a dedicated compaction rule.
+        let result = AgentEngine.evaluate(manifest: try Self.manifest("claude"), screen: "✻ Compacting conversation…", title: "")
+        #expect(result.activity == .working)
+        #expect(result.matchedRuleID == "live_turn_working")
+    }
+
     @Test func staleInterruptTextAboveAnIdlePromptIsIdle() throws {
         // The exact bug herdr guards against (and #352): a bullet line mentioning
         // "esc to interrupt" but shaped nothing like a live turn line (no ellipsis,

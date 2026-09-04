@@ -381,6 +381,26 @@ private func gateMatches(_ gate: CompiledGate, text: String, lowerText: String, 
     return true
 }
 
+// MARK: - AgentActivity
+
+/// An AI coding agent's screen-scraped turn state (Docs/ADR/009). Claude Code and
+/// opencode don't reliably emit a machine-readable signal on turn completion, so —
+/// like herdr — the engine reads the visible screen (and OSC title) and recognizes
+/// the agent's own UI. Result is a heuristic, not a contract — treat timing as best
+/// effort.
+enum AgentActivity: Equatable {
+    /// A turn is in progress (a live spinner/interrupt line, or compaction running).
+    case working
+    /// A permission / confirmation prompt is up — the agent needs a decision now.
+    case blocked
+    /// The agent's input prompt (`❯`) is shown — it finished and is waiting for you.
+    case idle
+    /// Not an agent screen we recognize (a plain shell, a pager, etc.) — or, for an
+    /// already-identified agent, a rule matched with `skip_state_update` and no prior
+    /// real state has been observed yet (see `SkipStateUpdateHold`).
+    case unknown
+}
+
 // MARK: - Engine
 
 /// One `AgentEngine.evaluate` call's outcome — the winning rule's identity
@@ -488,12 +508,10 @@ enum AgentEngine {
         )
     }
 
-    /// The seam JEF-902 wires into `driveAgentActivity` in place of
-    /// `AgentActivityDetector.classify` — same shape (`AgentActivity` out), now
-    /// backed by the manifest engine instead of hand-ported constants. Callers
-    /// that need `skip_state_update` held across calls (a per-terminal, stateful
-    /// concern — see `SkipStateUpdateHold`) should call `evaluate` directly
-    /// instead, since this convenience wrapper discards that information.
+    /// A convenience wrapper over `evaluate` for a caller that doesn't need to hold
+    /// `skip_state_update` across calls — `TerminalWindowView.driveAgentActivity`
+    /// doesn't use this; it calls `evaluate` directly and threads the result through
+    /// its own per-terminal `SkipStateUpdateHold`.
     static func classify(screen: String, title: String, agent manifest: CompiledManifest) -> AgentActivity {
         evaluate(manifest: manifest, screen: screen, title: title).activity
     }

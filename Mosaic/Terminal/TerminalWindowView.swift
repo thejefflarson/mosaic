@@ -1029,34 +1029,56 @@ final class TerminalWindowView: NSView {
     //
     // Claude Code and opencode don't reliably emit a machine signal on turn
     // completion (see Docs/ADR/007 and the research trail), so — like herdr — we read
-    // the bottom of the visible screen and recognize the agent's own UI. The
-    // cross-agent signal is the interrupt affordance ("esc to interrupt"): present ⇒
-    // working; gone after having been working ⇒ turn done. See AgentActivityDetector.
+    // the visible screen (and OSC title) and recognize the agent's own UI via the
+    // vendored manifest engine (Docs/ADR/009). The cross-agent signal is the interrupt
+    // affordance ("esc to interrupt"): present ⇒ working; gone after having been
+    // working ⇒ turn done. See AgentEngine.
     private var agentWasWorking = false
     private var lastAgentClassify: TimeInterval = 0
+    /// Holds the last real (non-`skip_state_update`) activity across drive ticks —
+    /// see `SkipStateUpdateHold`. Per-terminal, mutated only from `driveAgentActivity`.
+    private var skipStateUpdateHold = SkipStateUpdateHold()
 
-    /// The bottom `count` rows of the *visible* screen as trimmed strings.
-    private func bottomVisibleLines(_ count: Int) -> [String] {
-        guard let terminal = termView.terminal else { return [] }
-        let rows = terminal.rows
+    /// Every bundled agent-detection manifest, compiled once and shared by every
+    /// terminal — `ManifestStore.loadBundled()` parses and regex-compiles the bundled
+    /// manifests, which are identical app-wide, so a `static let` (not a per-terminal
+    /// property) avoids repeating that work for every new terminal window.
+    private static let manifestStore = ManifestStore.loadBundled()
+
+    /// The full *visible* screen (every on-screen row, not scrollback) as a single
+    /// newline-joined string. Wider than the old bottom-15-lines capture: the engine's
+    /// regions (e.g. `prompt_box_body`, `after_last_horizontal_rule`) slice internally
+    /// and need more of the screen than a fixed tail to find their anchors.
+    private func visibleScreenText() -> String {
+        guard let terminal = termView.terminal else { return "" }
         var lines: [String] = []
-        for row in max(0, rows - count)..<rows {
+        lines.reserveCapacity(terminal.rows)
+        for row in 0..<terminal.rows {
             guard let line = terminal.getLine(row: row) else { continue }
             lines.append(line.translateToString(
                 trimRight: true,
                 characterProvider: { let c = $0.getCharacter(); return c == "\0" ? " " : c }))
         }
-        return lines
+        return lines.joined(separator: "\n")
     }
 
     /// Classify the visible screen and drive the reducer. Returns true when this was an
-    /// agent screen we handled (so the caller skips the generic output-idle heuristic).
+    /// agent screen we handled (so the caller skips the generic output-idle heuristic) —
+    /// including when the PTY foreground process isn't an agent we recognize at all
+    /// (`ForegroundAgentIdentifier.identify` returns `nil`), which falls straight
+    /// through to the generic tier exactly like an unrecognized screen used to.
     /// The done-edge (working → not working) is resolved only when `quietElapsed` — i.e.
     /// from the settled-output timer — never mid-output.
     @discardableResult
     private func driveAgentActivity(quietElapsed: Bool) -> Bool {
         let now = ProcessInfo.processInfo.systemUptime
-        switch AgentActivityDetector.classify(bottomVisibleLines(15)) {
+        let manifests = Self.manifestStore.manifestsByID
+        guard let agentID = ForegroundAgentIdentifier.identify(termView: termView, manifests: manifests),
+              let manifest = manifests[agentID] else {
+            return false
+        }
+        let result = AgentEngine.evaluate(manifest: manifest, screen: visibleScreenText(), title: currentTitle)
+        switch skipStateUpdateHold.apply(result) {
         case .working:
             agentWasWorking = true
             if quietElapsed { rescheduleSilenceDebounce() }   // paused mid-turn; keep watching

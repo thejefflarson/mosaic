@@ -76,7 +76,7 @@ struct AgentManifest: Codable, Sendable {
     }
 }
 
-/// 1:1 with `AgentActivity` (`AgentActivityDetector.swift`) — herdr's engine has
+/// 1:1 with `AgentActivity` (`AgentEngine.swift`) — herdr's engine has
 /// exactly these four states. `nil` on a rule means "bookkeeping only" (e.g. a
 /// `skipStateUpdate` rule that recognizes a transient overlay without asserting a
 /// state).
