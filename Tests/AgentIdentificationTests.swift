@@ -32,19 +32,27 @@ struct AgentIdentificationTests {
     }
 
     @Test func localAliasTableEntryMatches() throws {
-        // The empirical unknown this ticket flags (ADR-009 risk 2): assumes Claude
-        // Code's foreground process reports as "node". See
-        // AgentIdentifier.localAliasTable's DECISION NEEDED note.
+        // `claude-code` → `claude` via the local alias table.
         let manifests = ["claude": try manifest(id: "claude")]
-        #expect(AgentIdentifier.resolveManifestID(processName: "node", manifests: manifests) == "claude")
+        #expect(AgentIdentifier.resolveManifestID(processName: "claude-code", manifests: manifests) == "claude")
+    }
+
+    @Test func realNodeProcessIsNotClaude() throws {
+        // Regression: an unrelated Node CLI's argv0 basename is "node" and MUST NOT
+        // resolve to Claude. Claude Code's real argv0 basename is "claude" (it
+        // launches via ~/.local/bin/claude), so it matches the manifest id directly
+        // and the old node→claude alias — which both missed real Claude and
+        // misidentified plain Node — is gone.
+        let manifests = ["claude": try manifest(id: "claude")]
+        #expect(AgentIdentifier.resolveManifestID(processName: "node", manifests: manifests) == nil)
     }
 
     @Test func localAliasTableEntryWithoutTargetManifestLoadedReturnsNil() throws {
-        // "node" aliases to "claude" in the table, but no manifest is loaded here
-        // (e.g. it was skipped for an unmet min_engine_version) — the table must
-        // not point at an id that isn't actually usable.
+        // `claude-code` aliases to `claude` in the table, but no manifest is loaded
+        // here (e.g. it was skipped for an unmet min_engine_version) — the table
+        // must not point at an id that isn't actually usable.
         let manifests: [String: CompiledManifest] = [:]
-        #expect(AgentIdentifier.resolveManifestID(processName: "node", manifests: manifests) == nil)
+        #expect(AgentIdentifier.resolveManifestID(processName: "claude-code", manifests: manifests) == nil)
     }
 
     @Test func unknownNameReturnsNil() throws {

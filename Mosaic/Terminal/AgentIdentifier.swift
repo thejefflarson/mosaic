@@ -6,21 +6,20 @@ import Foundation
 /// `ForegroundAgentIdentifier` below is the thin syscall wrapper that feeds it a
 /// real process name.
 enum AgentIdentifier {
-    /// Binary-name → manifest-id overrides for an agent whose OS-visible foreground
-    /// process name doesn't match its own manifest `id` or `aliases` — e.g. an
-    /// agent shipped as a Node.js CLI, where the kernel's `comm` name is the
-    /// interpreter (`node`), not the agent. Manifest `aliases` (vendored from
-    /// herdr) already cover the cases herdr itself knows about; this table is the
-    /// documented one-line local fix for the rest.
+    /// Binary-name → manifest-id overrides for an agent whose foreground `argv0`
+    /// basename doesn't match its own manifest `id` or `aliases`. Manifest
+    /// `aliases` (vendored from herdr) already cover the cases herdr itself knows
+    /// about; this table is the documented one-line local fix for the rest.
     ///
-    /// DECISION NEEDED (JEF-902 live dogfood, ADR-009 risk 2): nobody has confirmed
-    /// Claude Code's actual foreground process name yet. This table assumes it
-    /// reports as `node` (its distribution is a Node.js CLI) rather than `claude`.
-    /// If dogfooding a live terminal shows a different name, correct the entry
-    /// below — that correction *is* the point of keeping this table separate from
-    /// the manifest's own `aliases`, which are vendored and not ours to edit.
+    /// Empirically settled (was ADR-009 risk 2): Claude Code's foreground `argv0`
+    /// basename is `claude` — it launches via `~/.local/bin/claude` (or bare
+    /// `claude` on PATH), which matches manifest id `claude` directly, so it needs
+    /// no entry here. The earlier `node`→`claude` guess was wrong twice over: a
+    /// real Claude process' `argv0` is `claude`, and a real `node` process' is
+    /// `node` (an unrelated Node CLI), so mapping `node`→`claude` would both miss
+    /// Claude and misidentify plain Node. `claude-code` stays as belt-and-suspenders
+    /// (some launchers may use it) though the manifest already lists it as an alias.
     static let localAliasTable: [String: String] = [
-        "node": "claude",
         "claude-code": "claude",
     ]
 
@@ -116,11 +115,50 @@ enum ForegroundAgentIdentifier {
         return identify(childfd: process.childfd, shellPid: process.shellPid, manifests: manifests)
     }
 
-    /// `proc_name` (libproc) returns the kernel's `comm` name for `pid`, truncated
-    /// to `MAXCOMLEN` (16 bytes incl. NUL on macOS) — irrelevant here, since every
-    /// manifest id/alias/local-alias-table entry matched against it is far shorter.
-    /// Returns `nil` on any libproc failure (e.g. the process has already exited).
+    /// The foreground process's identifying name: its `argv0` basename (the stable
+    /// launcher name, e.g. `claude`), falling back to the kernel `comm` name
+    /// (`proc_name`) when `argv0` is unavailable.
+    ///
+    /// `argv0` is load-bearing, and `proc_name` alone is insufficient: agents now
+    /// ship as **versioned self-contained binaries**. Claude Code execs
+    /// `~/.local/share/claude/versions/<version>`, so the kernel `comm`
+    /// (`proc_name`) is the version string (e.g. `2.1.217`), never `claude` — which
+    /// matches no manifest and would drop every Claude terminal to the generic
+    /// tier. Its `argv0` is the launcher (`~/.local/bin/claude`, or bare `claude`),
+    /// whose basename is the stable `claude`. This is the same signal herdr's own
+    /// identifier prefers (`src/detect/mod.rs` `normalized_process_name`:
+    /// `argv0 ?? name`). We read only the foreground group leader's `argv0`, not
+    /// herdr's full job scan / runtime-unwrap (a node/bun script agent whose argv0
+    /// is the interpreter still falls to the generic tier — a documented gap).
     private static func liveProcessName(pid: pid_t) -> String? {
+        argv0Basename(pid: pid) ?? procComm(pid: pid)
+    }
+
+    /// `argv0` basename via `sysctl(KERN_PROCARGS2)`. Returns nil on any sysctl
+    /// failure or malformed buffer; every index is bounds-checked against the
+    /// actual returned length so a short/garbage buffer can't trap.
+    private static func argv0Basename(pid: pid_t) -> String? {
+        var mib = [CTL_KERN, KERN_PROCARGS2, pid]
+        var size = 0
+        let headerSize = MemoryLayout<Int32>.size   // leading argc
+        guard sysctl(&mib, 3, nil, &size, nil, 0) == 0, size > headerSize else { return nil }
+        var buffer = [UInt8](repeating: 0, count: size)
+        guard sysctl(&mib, 3, &buffer, &size, nil, 0) == 0, size > headerSize else { return nil }
+        // Layout: [argc: Int32][exec_path\0][\0 padding][argv0\0][argv1\0]…
+        var i = headerSize
+        while i < size, buffer[i] != 0 { i += 1 }   // skip exec_path
+        while i < size, buffer[i] == 0 { i += 1 }   // skip NUL padding
+        let start = i
+        while i < size, buffer[i] != 0 { i += 1 }   // read argv0
+        guard i > start else { return nil }
+        let argv0 = String(decoding: buffer[start..<i], as: UTF8.self)
+        return (argv0 as NSString).lastPathComponent
+    }
+
+    /// `proc_name` (libproc) returns the kernel `comm` name for `pid`, truncated to
+    /// `MAXCOMLEN`. The `argv0`-unavailable fallback. Returns nil on any libproc
+    /// failure (e.g. the process has already exited).
+    private static func procComm(pid: pid_t) -> String? {
         var buffer = [CChar](repeating: 0, count: 64)
         let length = buffer.withUnsafeMutableBufferPointer { ptr -> Int32 in
             proc_name(pid, ptr.baseAddress, UInt32(ptr.count))

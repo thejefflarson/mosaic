@@ -44,8 +44,12 @@ all attention UI are unchanged.
    SwiftTerm; the one low-priority claude rule it backs is already covered by `prompt_box_body`).
 
 4. **Identify the agent first, then evaluate only that manifest.** Via the PTY foreground process
-   (`tcgetpgrp(childfd)` → pgid → `proc_name`/`proc_pidpath`) matched against manifest `id` +
-   `aliases` (plus a small local alias table for binary-name mismatches). This is required for
+   (`tcgetpgrp(childfd)` → pgid → the group leader's **`argv0` basename**, `sysctl(KERN_PROCARGS2)`,
+   falling back to `proc_name`) matched against manifest `id` + `aliases` (plus a small local alias
+   table for binary-name mismatches). `argv0` — not `proc_name` — because agents ship as versioned
+   self-contained binaries: Claude Code execs `~/.local/share/claude/versions/<ver>`, so `proc_name`
+   returns the version string, never `claude`, while `argv0`'s basename is the stable launcher name
+   `claude`. This is the same signal herdr's own identifier prefers. This is required for
    **correctness**, not just cost: codex's `osc_title_idle` matches any non-empty title, so
    cross-evaluating all manifests would report a plain shell as "idle" forever. It also makes
    bundling all ~20 manifests **free** — only the identified agent's manifest ever runs.
@@ -70,9 +74,12 @@ all attention UI are unchanged.
 - The realistic bug source is ICU-vs-Rust-regex divergence. It is contained by porting herdr's own
   fixture corpus (inline screen→state tests, Apache-2.0) as our regressions, checked at re-vendor
   time — not in the field.
-- One empirical unknown remains: the agent's foreground-process *name* (e.g. Claude Code as `claude`
-  vs `node`). Settled by a short dogfood check; the fallback for any misidentified terminal is
-  today's generic-tier behavior.
+- The empirical unknown (Claude Code's foreground name) is **settled**: its `argv0` basename is
+  `claude` (verified against live processes), matching the manifest `id` directly — the earlier
+  `node` guess was wrong both ways (real Claude is `claude`; real `node` is an unrelated CLI). The
+  remaining gap, deferred: a runtime-wrapped agent (a `node`/`bun` script whose `argv0` is the
+  interpreter) needs herdr's full job-scan / argv-unwrap, which we did not port — such a terminal
+  falls to the generic tier.
 - Apache-2.0 obligations are met by shipping herdr's LICENSE + a NOTICE stating our changes; the
   engine is an independent Swift implementation of the published semantics.
 
