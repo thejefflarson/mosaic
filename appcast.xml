@@ -140,5 +140,13 @@
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <enclosure url="https://github.com/thejefflarson/mosaic/releases/download/v0.11.0/Mosaic-v0.11.0.dmg" sparkle:edSignature="TnFN4JCqFxw8Sufmts/665VDb8Zm1biAicniIR6imIY2A5JCOGdJDSM/LqTkqaF2lIGE7WOcavHs8c8YH7NuAQ==" length="3302956" type="application/octet-stream" />
     </item>
+    <item>
+      <title>Mosaic 0.11.1</title>
+      <pubDate>Sat, 05 Sep 2026 22:56:00 +0000</pubDate>
+      <sparkle:version>37</sparkle:version>
+      <sparkle:shortVersionString>0.11.1</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <enclosure url="https://github.com/thejefflarson/mosaic/releases/download/v0.11.1/Mosaic-v0.11.1.dmg" sparkle:edSignature="9sdEsvxpWHMA++qOyx3TrWMDznyADLrAtnTFtNvIXymc5/cEXfYCfoP0PI06wDXKup5bprBZLlVCzhWuW8HRAA==" length="3358880" type="application/octet-stream" />
+    </item>
   </channel>
 </rss>
