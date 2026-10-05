@@ -1,6 +1,8 @@
 import Foundation
+import OSLog
 
 final class WorkspaceStore: Sendable {
+    private static let logger = Logger(subsystem: "com.jeff.Mosaic", category: "WorkspaceStore")
     static let shared = WorkspaceStore()
 
     private let storeURL: URL
@@ -34,15 +36,34 @@ final class WorkspaceStore: Sendable {
         queue.async {
             do {
                 let data = try JSONEncoder().encode(snapshot)
-                try data.write(to: url, options: .atomic)
-                // Scrollback may include secrets the user pasted/typed (.env, tokens,
-                // SSH passphrases). 0600 keeps the file off backups-as-other-users
-                // and out of reach of unsandboxed peer processes harvesting Application
-                // Support. Same treatment is applied to stalls.log on first write.
-                try? FileManager.default.setAttributes([.posixPermissions: 0o600],
-                                                       ofItemAtPath: url.path)
+                // Write through a temporary file created with 0600 mode so the
+                // destination never exists at a weaker permission than intended.
+                // The old `data.write(…, .atomic) + setAttributes` approach had a
+                // brief TOCTOU window where the file existed at umask permissions
+                // (typically 0644) between the atomic rename and the chmod.
+                let tmpPath = url.path + ".tmp"
+                let fd = Darwin.open(tmpPath, O_WRONLY | O_CREAT | O_TRUNC, 0o600)
+                if fd >= 0 {
+                    var writeOK = data.withUnsafeBytes { buf -> Bool in
+                        guard let ptr = buf.baseAddress else { return false }
+                        return Darwin.write(fd, ptr, buf.count) == buf.count
+                    }
+                    Darwin.close(fd)
+                    if writeOK {
+                        writeOK = Darwin.rename(tmpPath, url.path) == 0
+                    }
+                    if !writeOK {
+                        try? FileManager.default.removeItem(atPath: tmpPath)
+                    }
+                } else {
+                    // Fall back to the atomic-write path if the temp-file open fails,
+                    // then tighten permissions as closely behind as possible.
+                    try data.write(to: url, options: .atomic)
+                    try? FileManager.default.setAttributes([.posixPermissions: 0o600],
+                                                           ofItemAtPath: url.path)
+                }
             } catch {
-                print("[WorkspaceStore] save failed: \(error)")
+                WorkspaceStore.logger.error("save failed: \(error, privacy: .public)")
             }
         }
     }

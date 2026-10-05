@@ -69,7 +69,9 @@ final class InterceptingTerminalView: LocalProcessTerminalView {
             switch b1 {
             case 0x50, 0x5D, 0x58, 0x5E, 0x5F:        // DCS, OSC, SOS, PM, APC
                 return false
-            case 0x5B where data.count >= 3:           // CSI — DEC private + protocol responses
+            case 0x5B where data.count < 3:            // incomplete CSI — never user-generated; suppress
+                return false
+            case 0x5B:                                 // CSI — DEC private + protocol responses
                 let b2 = data[data.startIndex + 2]
                 if b2 == 0x3F || b2 == 0x3E { return false }
                 // Block intermediate-byte sequences (e.g. DECSTR ESC[!p).
@@ -181,6 +183,29 @@ final class InterceptingTerminalView: LocalProcessTerminalView {
             default:
                 out.append(s)
             }
+        }
+        // Cross-script confusable homoglyph mitigation. NFKC handles full-width
+        // and compatibility variants but does NOT collapse, e.g., Cyrillic а
+        // (U+0430) onto Latin a. If the output contains both ASCII letters and
+        // characters from a known confusable script (Cyrillic, Greek, Armenian),
+        // strip the confusable-script scalars to prevent visually-identical but
+        // byte-different commands from surviving to the clipboard.
+        // A string that is purely Cyrillic or purely Greek is left intact.
+        let hasASCIILetter = out.contains {
+            ($0.value >= 0x41 && $0.value <= 0x5A) || ($0.value >= 0x61 && $0.value <= 0x7A)
+        }
+        if hasASCIILetter {
+            var stripped = String.UnicodeScalarView()
+            stripped.reserveCapacity(out.count)
+            for s in out {
+                let v = s.value
+                let isConfusableScript =
+                    (v >= 0x0370 && v <= 0x03FF) ||   // Greek and Coptic
+                    (v >= 0x0400 && v <= 0x052F) ||   // Cyrillic + supplement
+                    (v >= 0x0530 && v <= 0x058F)      // Armenian
+                if !isConfusableScript { stripped.append(s) }
+            }
+            out = stripped
         }
         return String(out)
     }
@@ -1557,8 +1582,17 @@ final class TerminalWindowView: NSView {
         ]
         // Exact-name matching for well-known credential vars whose names don't
         // follow a suffix pattern (e.g. DATABASE_URL, where "_URL" alone is too broad).
+        // Covers common 12-factor service connection strings that embed credentials
+        // (user:password@host) in the URL itself.
         let exactCredentialNames: Set<String> = [
-            "DATABASE_URL",   // common 12-factor DB connection strings
+            "DATABASE_URL",   // PostgreSQL / generic DB
+            "REDIS_URL",      // Redis
+            "MONGO_URL",      // MongoDB (short form)
+            "MONGODB_URL",    // MongoDB (long form)
+            "RABBITMQ_URL",   // RabbitMQ AMQP
+            "AMQP_URL",       // generic AMQP
+            "CELERY_BROKER_URL",
+            "CELERY_RESULT_BACKEND",
         ]
         for key in env.keys {
             let upper = key.uppercased()

@@ -532,6 +532,9 @@ final class FreehandAnnotationView: AnnotationView {
     required init?(coder: NSCoder) { fatalError() }
 
     func addWorldPoint(_ worldPt: CGPoint) {
+        // Mirror the 100k-point restore cap so live strokes are bounded the same way,
+        // preventing unbounded heap growth and main-actor stalls during rapid input.
+        guard localPoints.count < 100_000 else { return }
         expandFrame(including: worldPt)
         let local = CGPoint(x: worldPt.x - frame.origin.x, y: worldPt.y - frame.origin.y)
         localPoints.append(local)
@@ -623,15 +626,19 @@ final class ImageAnnotationView: AnnotationView {
     static let maxImageDimension: CGFloat = 8000
 
     init?(at worldPt: CGPoint, url: URL) {
-        let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
-        if let size = attrs?[.size] as? NSNumber, size.intValue > Self.maxImageBytes { return nil }
+        // Load the file into memory first so the size guard and CGImageSource
+        // both operate on the same bytes, eliminating the TOCTOU window between
+        // attributesOfItem and CGImageSourceCreateWithURL where a same-user process
+        // could swap the file in between.
+        guard let data = try? Data(contentsOf: url, options: .mappedIfSafe),
+              data.count <= Self.maxImageBytes else { return nil }
         // Decode via CGImageSource + thumbnail-at-index so the post-decode pixel
         // buffer is bounded regardless of the file's declared dimensions. NSImage
         // routes through ImageIO too, but it decodes the full buffer; using the
         // thumbnail API caps the decoded memory at maxImageDimension squared.
         // ImageIO has a history of TIFF/HEIC/WebP parser bugs (CVE-2022-32785,
         // CVE-2023-41064 …) — limiting decoded size shrinks the attack surface.
-        guard let (image, sourceSize) = Self.decodeBounded(url: url) else { return nil }
+        guard let (image, sourceSize) = Self.decodeBounded(data: data) else { return nil }
         let ar = (sourceSize.width > 0 && sourceSize.height > 0) ? sourceSize.width / sourceSize.height : 1
         let scale = min(1, min(400 / max(1, sourceSize.width), 300 / max(1, sourceSize.height)))
         let size = CGSize(width: sourceSize.width * scale, height: sourceSize.height * scale)
@@ -641,14 +648,16 @@ final class ImageAnnotationView: AnnotationView {
         savedImagePath = Self.copyFile(url, id: annotationID)
     }
 
-    /// Decode `url` to an NSImage whose pixel buffer is bounded by
+    /// Decode `data` to an NSImage whose pixel buffer is bounded by
     /// `maxImageDimension`. Returns the decoded NSImage plus the source's
     /// declared logical size (used for aspect-ratio + initial frame).
-    private static func decodeBounded(url: URL) -> (image: NSImage, sourceSize: CGSize)? {
+    /// Accepts pre-loaded Data so the caller can bound-check the file size
+    /// before parsing begins, eliminating a TOCTOU window.
+    private static func decodeBounded(data: Data) -> (image: NSImage, sourceSize: CGSize)? {
         let opts: [CFString: Any] = [
             kCGImageSourceShouldCache: false,
         ]
-        guard let src = CGImageSourceCreateWithURL(url as CFURL, opts as CFDictionary),
+        guard let src = CGImageSourceCreateWithData(data as CFData, opts as CFDictionary),
               let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any] else {
             return nil
         }

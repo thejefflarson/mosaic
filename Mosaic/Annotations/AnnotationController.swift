@@ -105,6 +105,9 @@ final class AnnotationController {
     // MARK: - CRUD
 
     func add(_ av: AnnotationView) {
+        // Mirror the restore cap so interactive creation is bounded the same way,
+        // preventing unbounded view-memory growth.
+        guard annotations.count < Self.maxRestoredAnnotations else { return }
         wire(av)
         undoManager?.setActionName("Add Annotation")
         undoManager?.registerUndo(withTarget: self) { @MainActor [weak av] ac in

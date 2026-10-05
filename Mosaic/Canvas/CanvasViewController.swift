@@ -204,6 +204,15 @@ final class CanvasViewController: NSViewController {
 
     private var saveDebounceTimer: Timer?
     private var workspaceRestored = false
+
+    // MARK: - App-level notification rate limiter
+
+    /// Rolling-window counter limiting app-wide system notifications to ≤ 60/min,
+    /// preventing a fleet of 128 terminals from spamming the macOS notification
+    /// centre even if each terminal's per-terminal cap is not yet exhausted.
+    private var appNotifCount = 0
+    private var appNotifWindowStart: Double = -.infinity
+    private static let appNotifPerMinuteCap = 60
     var currentTheme: Theme = {
         let id = UserDefaults.standard.string(forKey: "themeID") ?? Theme.dark.id
         return Theme.allThemes.first { $0.id == id } ?? .dark
@@ -1031,6 +1040,16 @@ final class CanvasViewController: NSViewController {
             terminalController.snapViewportToTerminal(tw)
         }
         guard !appActive else { return }
+        // App-level rolling-window rate limit: ≤ appNotifPerMinuteCap notifications/min
+        // across all terminals, guarding against large fleet saturation of the
+        // macOS notification centre.
+        let now = ProcessInfo.processInfo.systemUptime
+        if now - appNotifWindowStart >= 60 {
+            appNotifWindowStart = now
+            appNotifCount = 0
+        }
+        guard appNotifCount < Self.appNotifPerMinuteCap else { return }
+        appNotifCount += 1
         AppDelegate.requestNotificationAuthorizationIfNeeded()
         let content = UNMutableNotificationContent()
         content.title = title ?? (tw.currentTitle.isEmpty ? "Mosaic" : tw.currentTitle)
@@ -1038,7 +1057,11 @@ final class CanvasViewController: NSViewController {
         content.sound = .default
         let request = UNNotificationRequest(identifier: UUID().uuidString,
                                             content: content, trigger: nil)
-        UNUserNotificationCenter.current().add(request)
+        UNUserNotificationCenter.current().add(request) { error in
+            if let error {
+                os_log(.error, "UNUserNotificationCenter add failed: %{public}@", error.localizedDescription)
+            }
+        }
     }
 
     /// Post a desktop notification when a terminal newly needs attention from a
@@ -1048,6 +1071,14 @@ final class CanvasViewController: NSViewController {
     /// handled by the bell/OSC paths, not here.
     private func postAttentionNotification(_ tw: TerminalWindowView, title: String, body: String) {
         guard !NSApp.isActive else { return }
+        // App-level rolling-window rate limit shared with notifyAttention().
+        let now = ProcessInfo.processInfo.systemUptime
+        if now - appNotifWindowStart >= 60 {
+            appNotifWindowStart = now
+            appNotifCount = 0
+        }
+        guard appNotifCount < Self.appNotifPerMinuteCap else { return }
+        appNotifCount += 1
         AppDelegate.requestNotificationAuthorizationIfNeeded()
         let content = UNMutableNotificationContent()
         content.title = title
@@ -1055,7 +1086,12 @@ final class CanvasViewController: NSViewController {
         // No sound — the banner + dock badge are the signal (the user doesn't want an
         // audible ping, and a raw terminal BEL already makes noise of its own).
         UNUserNotificationCenter.current().add(
-            UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
+            UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
+        ) { error in
+            if let error {
+                os_log(.error, "UNUserNotificationCenter add failed: %{public}@", error.localizedDescription)
+            }
+        }
     }
 }
 
