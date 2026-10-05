@@ -142,8 +142,13 @@ enum ForegroundAgentIdentifier {
         var size = 0
         let headerSize = MemoryLayout<Int32>.size   // leading argc
         guard sysctl(&mib, 3, nil, &size, nil, 0) == 0, size > headerSize else { return nil }
+        let expectedSize = size
         var buffer = [UInt8](repeating: 0, count: size)
         guard sysctl(&mib, 3, &buffer, &size, nil, 0) == 0, size > headerSize else { return nil }
+        // If the buffer size shrank significantly between the two sysctl calls, the
+        // process likely exec'd a new image in between; the argv0 bytes belong to the
+        // new image, not the one we were asked to identify. Discard to avoid misidentification.
+        guard size >= expectedSize / 2 else { return nil }
         // Layout: [argc: Int32][exec_path\0][\0 padding][argv0\0][argv1\0]…
         var i = headerSize
         while i < size, buffer[i] != 0 { i += 1 }   // skip exec_path
