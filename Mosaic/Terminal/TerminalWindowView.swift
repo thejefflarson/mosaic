@@ -431,9 +431,16 @@ final class InterceptingTerminalView: LocalProcessTerminalView {
         } else if let colon = trimmed.firstIndex(of: ":"),
                   let url = URL(string: trimmed),
                   let scheme = url.scheme?.lowercased(),
-                  // Avoid mis-classifying "hello.txt:42" — scheme must look like
-                  // a real scheme (letters only, no dots) for the opaque branch.
+                  // Opaque-scheme branch (mailto:, tel:, …). The URL grammar accepts
+                  // both a scheme and a `filename:line[:col]` reference here, so
+                  // distinguish them two ways: the pre-colon text must be letters only
+                  // (so "hello.txt:42", with a dot, is a path), AND the post-colon text
+                  // must not be a bare line/column number (so "Makefile:5" — an
+                  // extensionless file — is a path, not scheme "makefile", which would
+                  // reach NSWorkspace with an unhandled scheme and fail -50 paramErr).
                   trimmed[..<colon].allSatisfy({ $0.isASCII && $0.isLetter }),
+                  trimmed[trimmed.index(after: colon)...]
+                      .range(of: #"^[0-9]+(?::[0-9]+)?$"#, options: .regularExpression) == nil,
                   !deniedLinkSchemes.contains(scheme) {
             return url
         }

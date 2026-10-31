@@ -121,6 +121,21 @@ struct LinkResolutionTests {
         #expect(url?.absoluteString == "mailto:user@example.com")
     }
 
+    @Test func extensionlessFilenameWithLineSuffixResolvesAsPath() throws {
+        // "Makefile:5" (an extensionless file + :line, as grep / compiler / stack
+        // traces emit) must resolve to the FILE, not URL scheme "makefile" — which
+        // reaches NSWorkspace with an unhandled scheme and fails -50 paramErr.
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mosaic-link-test-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try Data("all:\n".utf8).write(to: dir.appendingPathComponent("Makefile"))
+
+        let url = InterceptingTerminalView.resolveOpenableURL(for: "Makefile:5", cwd: dir.path)
+        #expect(url?.isFileURL == true)
+        #expect(url?.lastPathComponent == "Makefile")
+    }
+
     @Test func emptyStringReturnsNil() {
         #expect(InterceptingTerminalView.resolveOpenableURL(for: "", cwd: Self.cwd) == nil)
         #expect(InterceptingTerminalView.resolveOpenableURL(for: "   ", cwd: Self.cwd) == nil)
