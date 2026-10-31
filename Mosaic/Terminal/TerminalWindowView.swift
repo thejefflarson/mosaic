@@ -335,58 +335,52 @@ final class InterceptingTerminalView: LocalProcessTerminalView {
         super.paste(s)
     }
 
-    /// Open a link resolved from an OSC 8 payload or from implicit link detection.
-    /// SwiftTerm's default only handles URLs with a scheme — plain file paths like
-    /// `Mosaic/App/AppDelegate.swift` or `src/foo.rs:42:10` fall through and error
-    /// out. We resolve them against the terminal's cwd and open the file.
-    public func requestOpenLink(source _: TerminalView, link: String, params _: [String: String]) {
+    /// Open a clicked link — an OSC 8 payload or an implicitly-detected path.
+    /// Resolves plain file paths (`Mosaic/App/AppDelegate.swift`, `src/foo.rs:42:10`)
+    /// against the terminal's cwd into a real file URL; SwiftTerm's own default opens
+    /// via `URL(string:)`, which has no scheme for a bare path and fails with OSStatus
+    /// -50. Dangerous URL schemes are refused in `resolveOpenableURL` (ADR-006 scheme
+    /// deny-list). There is no per-click confirmation dialog (ADR-006): the deliberate
+    /// click is the gate — as in other terminals — and a resolved file opens in its
+    /// viewer rather than executing.
+    func openResolvedLink(_ link: String) {
         let cwd = enclosingTerminalWindowView?.currentCwd
             ?? FileManager.default.homeDirectoryForCurrentUser.path
         guard let url = Self.resolveOpenableURL(for: link, cwd: cwd) else { return }
 
-        // Rate-limit OSC 8 link-open confirmation dialogs to ≤ 5 per minute.
-        // A hostile PTY can emit unbounded OSC 8 sequences; without a cap, each
-        // one blocks the main thread with a modal NSAlert (DoS + alert fatigue).
+        // Bound opens to ≤ 5 / minute so a screen dense with links can't turn a
+        // stray double-click into a burst of app launches.
         let now = ProcessInfo.processInfo.systemUptime
         if now - linkOpenWindowStart >= 60 {
             linkOpenCount = 0
             linkOpenWindowStart = now
         }
         guard linkOpenCount < 5 else {
-            securityLog.warning("link-open rate-limit reached; dropping PTY-requested open of \(url.absoluteString, privacy: .private)")
+            securityLog.warning("link-open rate-limit reached; dropping open of \(url.absoluteString, privacy: .private)")
             return
         }
         linkOpenCount += 1
 
-        // Always confirm before opening PTY-supplied links. Terminal output is untrusted;
-        // a crafted OSC 8 payload could target local files or app-registered URL schemes.
-        let alert = NSAlert()
-        alert.messageText = "Open Link?"
-        // Show the full URL so the user sees exactly what will be opened.
-        // Truncating the display string would let a crafted URL hide a malicious
-        // suffix behind the ellipsis while NSWorkspace.open() receives the full URL.
-        alert.informativeText = "Terminal wants to open:\n\(url.absoluteString)"
-        alert.alertStyle = .informational
-        alert.addButton(withTitle: "Open")
-        alert.addButton(withTitle: "Cancel")
-        guard alert.runModal() == .alertFirstButtonReturn else {
-            securityLog.info("link-open cancelled by user: \(url.absoluteString, privacy: .private)")
-            return
-        }
-
-        // Re-check existence just before opening to narrow the TOCTOU window
-        // between resolveOpenableURL (called before the dialog was shown) and
-        // the NSWorkspace.open() call. During a long confirmation dialog a
-        // concurrent process could atomically replace a file or symlink target.
+        // Re-check existence at open time so a symlink swapped between resolve and
+        // open can't redirect the open to a different target.
         if url.isFileURL {
             guard FileManager.default.fileExists(atPath: url.path) else {
                 securityLog.warning("link-open aborted: file no longer exists at \(url.path, privacy: .private)")
                 return
             }
         }
-
-        securityLog.info("link-open confirmed by user: \(url.absoluteString, privacy: .private)")
+        securityLog.info("link-open: \(url.absoluteString, privacy: .private)")
         NSWorkspace.shared.open(url)
+    }
+
+    /// SwiftTerm's `TerminalViewDelegate` link hook. For a `LocalProcessTerminalView`
+    /// subclass this is NOT the dispatched protocol witness — the requirement's
+    /// extension-default implementation (`URL(string:)` + `NSWorkspace.open`) wins, so
+    /// SwiftTerm never calls this method. Clicked links are opened by the shared
+    /// mouseUp monitor in `installSharedMonitors` instead. Kept and routed through the
+    /// same opener so a future SwiftTerm change that does dispatch it behaves the same.
+    public func requestOpenLink(source _: TerminalView, link: String, params _: [String: String]) {
+        openResolvedLink(link)
     }
 
     /// Schemes that are categorically blocked even with the user-confirmation
@@ -573,6 +567,10 @@ final class TerminalWindowView: NSView {
     // Shared event monitors — installed once, dispatch to the active terminal.
     private static var sharedMonitorsInstalled = false
 
+    // leftMouseDown location, to tell a link-opening click from a drag-select in
+    // the shared mouseUp monitor. One mouse → one shared slot.
+    private static var linkClickDown: NSPoint?
+
     // MARK: - Canvas reference (for zoom-corrected drag)
 
     weak var canvasView: CanvasView?
@@ -733,6 +731,36 @@ final class TerminalWindowView: NSView {
                 }
             }
             return event
+        }
+
+        // Open a clicked link/path. SwiftTerm routes link clicks through its
+        // `requestOpenLink` delegate hook, but for a LocalProcessTerminalView subclass
+        // the dispatched witness is the protocol's extension default (`URL(string:)` +
+        // NSWorkspace.open) — which turns a plain file path into a scheme-less URL that
+        // Launch Services rejects with OSStatus -50. `mouseUp` is public, not open, so
+        // we intercept the click here, resolve + open it ourselves (file paths → a real
+        // file URL; ADR-006 scheme deny-list applies), and consume the event so
+        // SwiftTerm's broken default never runs. A click is told from a drag-select by
+        // how far the cursor travelled since mouseDown.
+        NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .leftMouseUp]) { event in
+            guard let tv = terminalUnderPointer(for: event) else { linkClickDown = nil; return event }
+            if event.type == .leftMouseDown {
+                linkClickDown = event.locationInWindow
+                return event                       // let SwiftTerm anchor a selection
+            }
+            let down = linkClickDown
+            linkClickDown = nil
+            if let down, hypot(event.locationInWindow.x - down.x, event.locationInWindow.y - down.y) > 3 {
+                return event                       // dragged → text selection, not a click
+            }
+            let local = tv.convert(event.locationInWindow, from: nil)
+            guard let cell = cellAt(local: local, termView: tv),
+                  let link = tv.getTerminal().link(
+                      at: .screen(Position(col: cell.col, row: cell.row)),
+                      mode: .explicitAndImplicit)
+            else { return event }
+            tv.openResolvedLink(link)
+            return nil                             // consume so SwiftTerm's -50 default never runs
         }
 
         // TUI mouse wheel: when the app under the pointer has enabled mouse
