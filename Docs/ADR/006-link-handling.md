@@ -1,7 +1,7 @@
-# ADR 006 — OSC 8 link handling: confirmation dialog, deny-list, no path containment
+# ADR 006 — OSC 8 link handling: click-to-open, deny-list, no path containment
 
 **Status:** Accepted
-**Date:** 2026-05
+**Date:** 2026-05 (revised 2026-10: confirmation dialog removed — see Decision 1)
 
 ## Context
 
@@ -26,17 +26,41 @@ restrictive answers and how the threat is mitigated.
 
 ## Decisions
 
-### 1. Confirmation dialog is the primary mitigation
+### 1. No confirmation dialog — the deliberate click is the gate
 
-`requestOpenLink` shows an `NSAlert` displaying the full resolved URL with
-Open/Cancel buttons before any call to `NSWorkspace.open()`. This is the
-load-bearing defence against social-engineering via crafted OSC 8 payloads —
-the user sees `file:///etc/passwd` (or `vscode://command/exec?arg=…`) in the
-dialog and can refuse.
+Clicking a link opens it directly (through `openResolvedLink`), with no
+per-click Open/Cancel dialog. The gate is that the user chose to click a link
+the hand cursor already marked, the same model as iTerm/Ghostty/Terminal. The
+scheme deny-list (Decision 2) still refuses categorically-dangerous schemes,
+and a resolved file opens in its registered viewer (Preview, an editor) rather
+than executing.
 
-The full URL is shown — not truncated — so a long URL cannot hide a malicious
-suffix behind an ellipsis. This is enforced by
-`InterceptingTerminalView.requestOpenLink`.
+This reverses the original decision, which made an `NSAlert` the "load-bearing"
+defence. Two reasons:
+
+- **A per-click modal is friction no other terminal imposes**, and it trained
+  the user to click "Open" reflexively — alert fatigue erodes the very defence
+  it was meant to provide.
+- **That dialog never actually ran.** `requestOpenLink` is a `TerminalViewDelegate`
+  requirement *with an extension default*; `LocalProcessTerminalView` conforms to
+  the protocol using that default and makes itself its own delegate, so for our
+  `InterceptingTerminalView` subclass the dispatched witness is the default
+  (`URL(string:)` + `NSWorkspace.open`), never our method — a Swift protocol-witness
+  rule, not a bug we could fix by adding `override`. So in practice every link
+  opened with no dialog at all, *and* plain file paths became scheme-less URLs that
+  Launch Services rejected with OSStatus -50. Restoring a working dialog would mean
+  intercepting the click ourselves regardless; given the friction argument above we
+  intercept and open without one.
+
+Clicks are opened by a shared `mouseUp` monitor
+(`TerminalWindowView.installSharedMonitors`) that resolves the link under the
+click and calls `openResolvedLink`; it exists because SwiftTerm's `mouseUp` is
+`public`, not `open`, so the delegate hook can't be overridden.
+
+**Residual risk accepted:** an OSC 8 hyperlink can show one text while pointing
+elsewhere, so a single click can open a non-denied-but-unwanted target. The
+deny-list blocks the dangerous schemes; the rest is the same trust the user
+extends to any terminal's clickable links.
 
 ### 2. URL schemes are filtered by a deny-list, not an allow-list
 
@@ -85,44 +109,50 @@ no-ops legitimate clicks on system paths that terminal users routinely click:
 - `/etc/nginx/conf.d/site.conf` from config-editing workflows
 
 The PTY-controlled-cwd threat (a malicious process emits OSC 7 to repoint cwd
-at `/`, then OSC 8 with a relative link like `etc/passwd`) is real but is
-mitigated by the same confirmation dialog as scheme handling — the user sees
-the fully-resolved path before opening.
+at `/`, then OSC 8 with a relative link like `etc/passwd`) is real but bounded:
+the link only opens if the user clicks it, it resolves to an existing file, and
+opening it views the file rather than executing it.
 
 ### 4. Path canonicalisation defangs `..` segments
 
 Even without containment, paths are run through
 `URL(fileURLWithPath:).resolvingSymlinksInPath().standardizedFileURL.path`
-before `fileExists` and before being shown to the user in the confirmation
-dialog. A link like `sub/../hello.txt` resolves to `<cwd>/hello.txt` and is
-displayed plainly; a link with `..` segments that escape upward is shown in
-its final canonical form. The user sees what they're about to open.
+before `fileExists` and before the open. A link like `sub/../hello.txt`
+resolves to `<cwd>/hello.txt`; a link with `..` segments that escape upward
+resolves to its final canonical form, so the open targets exactly that
+canonical path and nothing is smuggled through unresolved `..`.
 
 ## Threat model summary
 
 | Threat | Mitigation |
 |--------|------------|
 | OSC 8 with `javascript:` / `data:` payload | Deny-list at `resolveOpenableURL` |
-| OSC 8 with unknown app scheme tricking user to confirm | User-confirmation dialog shows the full URL |
-| OSC 8 with `file:///etc/secrets` after social engineering | User-confirmation dialog shows the path |
-| OSC 7 cwd repoint + OSC 8 relative link | Canonicalisation + confirmation dialog |
-| `..`-laden link hiding the real target | `standardizedFileURL` folds segments before display |
-| Symlink in resolved path pointing elsewhere | `resolvingSymlinksInPath` follows before display |
+| OSC 8 with unknown app scheme | Opens only on a deliberate click; deny-list blocks the dangerous schemes |
+| OSC 8 with `file:///etc/secrets` after social engineering | Opens only on a deliberate click; a file opens in its viewer, not executed |
+| OSC 7 cwd repoint + OSC 8 relative link | Canonicalisation + must resolve to an existing file + click-gated |
+| `..`-laden link hiding the real target | `standardizedFileURL` folds segments, so the open targets the canonical path |
+| Symlink in resolved path pointing elsewhere | `resolvingSymlinksInPath` + a re-check at open time (a swap between resolve and open aborts) |
+| OSC 8 text that differs from its target | **Accepted residual risk** (Decision 1) — as in other terminals |
 
 ## Consequences
 
 - Custom URL schemes registered by other apps work as expected. Adding a new
   scheme handler does not require touching Mosaic.
 - Clicking system paths (`/etc/hosts`, `/var/log/…`) opens them in the default
-  handler after user confirmation.
-- The user is interrupted by a dialog on every link click. This is intentional;
-  terminal output cannot be trusted not to lie about what a link does.
-- Automated security scanners will likely propose flipping #2 or #3 again.
-  Reviewers should reject those changes citing this ADR.
+  handler, no dialog.
+- Link clicks open without interruption. The deny-list and the deliberate-click
+  gesture are the gate; the accepted residual risk is in Decision 1.
+- Automated security scanners will likely propose flipping #2 or #3, or
+  re-adding the confirmation dialog. Reviewers should weigh those against this
+  ADR (the dialog removal is deliberate, not an oversight).
 
 ## Related code
 
-- `InterceptingTerminalView.requestOpenLink` — the confirmation dialog
+- `TerminalWindowView.installSharedMonitors` — the shared `mouseUp` monitor that
+  opens a clicked link (the dispatch path that actually runs; see Decision 1)
+- `InterceptingTerminalView.openResolvedLink` — resolve + rate-limit + open, no dialog
+- `InterceptingTerminalView.requestOpenLink` — SwiftTerm delegate hook, not the
+  dispatched witness for our subclass (Decision 1); forwards to `openResolvedLink`
 - `InterceptingTerminalView.resolveOpenableURL` — scheme deny-list, path canonicalisation
 - `InterceptingTerminalView.deniedLinkSchemes` — the deny-list
 - `Tests/LinkResolutionTests.swift` — `customSchemesPassThrough`,
