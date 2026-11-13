@@ -53,7 +53,11 @@ final class TerminalController {
                 }
             }
         }
-        if let sh = ProcessInfo.processInfo.environment["SHELL"] {
+        // Apply the same ownership/permission guard to $SHELL that /etc/shells
+        // entries receive. A world-writable binary at $SHELL would otherwise bypass
+        // the trustworthiness check applied to every other entry.
+        if let sh = ProcessInfo.processInfo.environment["SHELL"],
+           TerminalController.isShellBinaryTrustworthy(atPath: sh) {
             set.insert(URL(fileURLWithPath: sh).resolvingSymlinksInPath().standardizedFileURL.path)
         }
         set.insert("/bin/zsh"); set.insert("/bin/bash"); set.insert("/bin/sh")

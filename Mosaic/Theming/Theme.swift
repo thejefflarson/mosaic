@@ -84,12 +84,16 @@ extension Theme {
     /// All themes: built-ins first, then any user-saved custom themes.
     static var allThemes: [Theme] { builtIn + customThemes }
 
+    /// Maximum number of user-saved custom themes. Prevents unbounded growth in
+    /// UserDefaults and repeated full-array iteration on every menu open.
+    private static let maxCustomThemes = 100
+
     static var customThemes: [Theme] {
         get {
             guard let data = UserDefaults.standard.data(forKey: "customThemes"),
                   let stored = try? JSONDecoder().decode([StoredTheme].self, from: data)
             else { return [] }
-            return stored.map(\.asTheme)
+            return stored.prefix(maxCustomThemes).map(\.asTheme)
         }
         set {
             if let data = try? JSONEncoder().encode(newValue.map(StoredTheme.init)) {
@@ -223,10 +227,13 @@ struct StoredTheme: Codable {
                       terminalForeground: .fromHex(termFg),
                       ansi: ansi.map(NSColor.fromHex))
         t.fontName            = fontName ?? ""
-        t.fontSize            = fontSize ?? 13
+        // Clamp font sizes decoded from UserDefaults to safe ranges — a tampered
+        // customThemes blob can supply extreme CGFloat values (e.g. 1e38) that
+        // cause AppKit to allocate proportionally large glyph bitmaps and stall layout.
+        t.fontSize            = min(max(fontSize ?? 13, 6), 72)
         t.annotationColor     = annotationColor.map(NSColor.fromHex) ?? .white
         t.annotationFontName  = annotationFontName ?? ""
-        t.annotationFontSize  = annotationFontSize ?? 148
+        t.annotationFontSize  = min(max(annotationFontSize ?? 148, 6), 256)
         t.stickyForeground    = stickyForeground.map(NSColor.fromHex) ?? c(0x1a1a1a)
         t.stickyBackground    = stickyBackground.map(NSColor.fromHex) ?? c(0xfff9a3)
         return t
