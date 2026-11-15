@@ -23,6 +23,38 @@ struct TerminalControllerShellTests {
                 "non-allowlisted executable must fall back to default; got \(resolved)")
     }
 
+    @Test func userOwnedShellBinaryIsTrustworthy() throws {
+        // A binary owned by the current user (not root) and not group/world-writable
+        // must be trusted — e.g. a Homebrew shell at /opt/homebrew (user-owned on
+        // Apple Silicon). This is the case that regressed defaultShellIsAllowed.
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mosaic-shell-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let bin = dir.appendingPathComponent("myshell")
+        FileManager.default.createFile(atPath: bin.path,
+                                       contents: Data("#!/bin/sh\n".utf8),
+                                       attributes: [.posixPermissions: 0o755])
+        #expect(TerminalController.isShellBinaryTrustworthy(atPath: bin.path) == true)
+    }
+
+    @Test func writableShellBinaryIsRejected() throws {
+        // Group- or world-writable binaries are rejected regardless of owner — anyone
+        // else could swap the payload.
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mosaic-shell-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        for mode in [0o757, 0o775] {   // world-writable, group-writable
+            let bin = dir.appendingPathComponent("sh-\(mode)")
+            FileManager.default.createFile(atPath: bin.path,
+                                           contents: Data("#!/bin/sh\n".utf8),
+                                           attributes: [.posixPermissions: mode])
+            #expect(TerminalController.isShellBinaryTrustworthy(atPath: bin.path) == false,
+                    "writable binary (mode \(String(mode, radix: 8))) must be rejected")
+        }
+    }
+
     @Test func defaultShellIsAllowed() {
         let resolved = TerminalController.resolveShell(TerminalController.defaultShell)
         // resolveShell may symlink-canonicalise (e.g. /bin/zsh → /private/var/select/sh

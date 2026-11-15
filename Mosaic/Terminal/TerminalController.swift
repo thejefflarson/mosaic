@@ -26,17 +26,24 @@ final class TerminalController {
         return allowedShells.contains(canonical) ? canonical : defaultShell
     }
 
-    /// Return true when the binary at `path` is owned by root (uid 0) and not
-    /// group- or world-writable. Defends against a tampered /etc/shells entry on a
-    /// SIP-disabled system pointing to a user-writable payload.
-    private static func isShellBinaryTrustworthy(atPath path: String) -> Bool {
+    /// Return true when the binary at `path` could only have been placed there by a
+    /// trusted principal: owned by root or by the current user, and not group- or
+    /// world-writable. Defends against a tampered /etc/shells entry (e.g. on a
+    /// SIP-disabled system) or a `$SHELL` pointing at a payload another user can swap.
+    ///
+    /// Current-user ownership is trusted, not just root: an attacker who can write the
+    /// user's own files already runs as the user, so requiring root-only buys nothing
+    /// and would reject legitimate Homebrew shells — `/opt/homebrew` is user-owned on
+    /// Apple Silicon, so a Homebrew `fish`/`zsh` set via `chsh` is uid != 0. The
+    /// load-bearing guard is the group/world-writable rejection, which blocks a binary
+    /// anyone else could replace. Non-private for direct unit testing.
+    static func isShellBinaryTrustworthy(atPath path: String) -> Bool {
         guard FileManager.default.isExecutableFile(atPath: path),
               let attrs = try? FileManager.default.attributesOfItem(atPath: path),
               let ownerID = attrs[.ownerAccountID] as? Int,
               let perms   = attrs[.posixPermissions] as? Int
         else { return false }
-        // Root-owned and not group-writable (0o020) or world-writable (0o002).
-        return ownerID == 0 && (perms & 0o022) == 0
+        return (ownerID == 0 || ownerID == Int(getuid())) && (perms & 0o022) == 0
     }
 
     /// Shell paths allowed when restoring from a snapshot. Built from /etc/shells
