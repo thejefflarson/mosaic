@@ -70,9 +70,7 @@ final class InterceptingTerminalView: LocalProcessTerminalView {
             switch b1 {
             case 0x50, 0x5D, 0x58, 0x5E, 0x5F:        // DCS, OSC, SOS, PM, APC
                 return false
-            case 0x5B where data.count < 3:            // incomplete CSI — never user-generated; suppress
-                return false
-            case 0x5B:                                 // CSI — DEC private + protocol responses
+            case 0x5B where data.count >= 3:           // CSI — DEC private + protocol responses
                 let b2 = data[data.startIndex + 2]
                 if b2 == 0x3F || b2 == 0x3E { return false }
                 // Block intermediate-byte sequences (e.g. DECSTR ESC[!p).
@@ -482,7 +480,15 @@ final class InterceptingTerminalView: LocalProcessTerminalView {
                   trimmed[trimmed.index(after: colon)...]
                       .range(of: #"^[0-9]+(?::[0-9]+)?$"#, options: .regularExpression) == nil,
                   !deniedLinkSchemes.contains(scheme) {
-            return url
+            if scheme == "file" {
+                // Single-slash `file:/abs/path` (no "://") lands here, not the branch
+                // above. Unwrap to the path and fall through so it gets the same
+                // canonicalise + exists-check + launchable-type refusal as a bare path,
+                // rather than reaching NSWorkspace.open as a raw file: URL.
+                pathBody = url.path
+            } else {
+                return url
+            }
         }
 
         // Strip trailing `:line` or `:line:col` suffix (compiler output).

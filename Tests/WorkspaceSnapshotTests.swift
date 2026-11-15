@@ -59,7 +59,10 @@ struct WorkspaceSnapshotTests {
         #expect(dw.height == 200)
         #expect(dw.shell  == "/bin/bash")
         #expect(dw.cwd    == "/tmp")
-        #expect(dw.title  == "test")
+        // Title is intentionally dropped on encode — OSC titles can carry secrets
+        // (file paths, prompts), so WindowSnapshot.encode writes "" regardless of the
+        // in-memory value. It therefore round-trips as empty even when set here.
+        #expect(dw.title  == "")
     }
 
     // MARK: - Backward compatibility

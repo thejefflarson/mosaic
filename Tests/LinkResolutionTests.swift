@@ -152,6 +152,26 @@ struct LinkResolutionTests {
         #expect(InterceptingTerminalView.resolveOpenableURL(for: "Evil.app", cwd: dir.path) == nil)
     }
 
+    @Test func singleSlashFileURLResolves() throws {
+        // `file:/abs/path` (one slash, no "://") must resolve to the file, same as a
+        // bare path — not pass through as a raw URL.
+        let (dir, file) = try Self.makeTempFile()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = InterceptingTerminalView.resolveOpenableURL(for: "file:" + file.path, cwd: dir.path)
+        #expect(url?.isFileURL == true)
+        #expect(url?.lastPathComponent == "hello.txt")
+    }
+
+    @Test func singleSlashFileURLToLaunchableRefused() throws {
+        // The launchable-type refusal must also cover `file:/abs/path.command` — the
+        // single-slash form that bypassed it before.
+        let (dir, _) = try Self.makeTempFile()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let cmd = dir.appendingPathComponent("run.command")
+        try Data("#!/bin/sh\n".utf8).write(to: cmd)
+        #expect(InterceptingTerminalView.resolveOpenableURL(for: "file:" + cmd.path, cwd: dir.path) == nil)
+    }
+
     @Test func ordinaryFileWithoutExtensionStillResolves() throws {
         // The launchable-type guard must not reject a normal document — a plain
         // file (even executable text) that NSWorkspace opens in a viewer.
