@@ -244,8 +244,7 @@ struct LinkResolutionTests {
     }
 
     @Test func pasteLeavesOrdinaryTextUnchanged() {
-        // No markers → byte-for-byte identical, so these pastes still take SwiftTerm's
-        // own paste path (kitty/bracketed wrapping untouched).
+        // No markers → byte-for-byte identical, so an ordinary paste is delivered as-is.
         let text = "git commit -m \"fix: thing\"\nmake test"
         #expect(InterceptingTerminalView.stripBracketedPasteMarkers(text) == text)
     }

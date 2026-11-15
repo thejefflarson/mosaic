@@ -340,13 +340,7 @@ final class InterceptingTerminalView: LocalProcessTerminalView {
     /// mode is off; in bracketed mode the shell defers execution until Enter, so only
     /// the marker strip applies there.
     override func paste(_ sender: Any?) {
-        // SwiftTerm declares paste(_:) as `Any` (non-optional) so coerce
-        // explicitly to silence the Any?→Any warning.
-        let s: Any = sender ?? NSNull()
-        guard let raw = NSPasteboard.general.string(forType: .string) else {
-            super.paste(s)
-            return
-        }
+        guard let raw = NSPasteboard.general.string(forType: .string) else { return }
         // Remove embedded bracketed-paste markers before delivery. In bracketed-paste
         // mode SwiftTerm wraps the clipboard in ESC[200~ … ESC[201~; a poisoned ESC[201~
         // in the clipboard would otherwise close that bracket early so the bytes after
@@ -365,12 +359,13 @@ final class InterceptingTerminalView: LocalProcessTerminalView {
             guard alert.runModal() == .alertFirstButtonReturn else { return }
         }
 
-        // An untouched clipboard goes through SwiftTerm's own paste so kitty-keyboard
-        // encoding and bracketed wrapping stay exactly as upstream. Only a paste we had
-        // to clean is delivered here, re-wrapped to match SwiftTerm's non-kitty paste.
-        if text == raw {
-            super.paste(s)
-        } else if getTerminal().bracketedPasteMode {
+        // Deliver the text read (and, when prompted, confirmed) above rather than
+        // deferring to super.paste, which re-reads NSPasteboard: a same-user process
+        // could swap the clipboard during the modal, pasting newlines the user never
+        // saw (TOCTOU). This mirrors SwiftTerm's non-kitty paste path; the one behaviour
+        // it drops — kitty key-event encoding for a paste while bracketed mode is off —
+        // doesn't apply to literal pasted text.
+        if getTerminal().bracketedPasteMode {
             send(data: EscapeSequences.bracketedPasteStart[0...])
             send(txt: text)
             send(data: EscapeSequences.bracketedPasteEnd[0...])
