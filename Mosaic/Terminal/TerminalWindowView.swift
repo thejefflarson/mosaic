@@ -333,30 +333,58 @@ final class InterceptingTerminalView: LocalProcessTerminalView {
         }
     }
 
-    /// Intercept paste to warn before sending multi-line clipboard content to the PTY.
-    /// Each newline acts as Enter in the terminal and may immediately execute whatever
-    /// text precedes it — clipboard-poisoned content could silently run commands.
-    /// Skipped when bracketed-paste mode is active; the shell handles newlines safely
-    /// in that mode by not executing until the user presses Enter explicitly.
+    /// Intercept paste to (1) strip embedded bracketed-paste markers so a poisoned
+    /// clipboard can't break out of the paste bracket, and (2) warn before sending
+    /// multi-line content to the PTY. Each newline acts as Enter and may immediately
+    /// execute whatever precedes it, so the newline warning runs when bracketed-paste
+    /// mode is off; in bracketed mode the shell defers execution until Enter, so only
+    /// the marker strip applies there.
     override func paste(_ sender: Any?) {
         // SwiftTerm declares paste(_:) as `Any` (non-optional) so coerce
         // explicitly to silence the Any?→Any warning.
         let s: Any = sender ?? NSNull()
-        guard !getTerminal().bracketedPasteMode,
-              let text = NSPasteboard.general.string(forType: .string),
-              text.contains("\n") || text.contains("\r") else {
+        guard let raw = NSPasteboard.general.string(forType: .string) else {
             super.paste(s)
             return
         }
-        let newlineCount = text.unicodeScalars.filter { $0 == "\n" || $0 == "\r" }.count
-        let alert = NSAlert()
-        alert.messageText = "Paste \(newlineCount) Line\(newlineCount == 1 ? "" : "s")?"
-        alert.informativeText = "The clipboard contains newlines. Each newline acts as Enter in the terminal and may execute commands immediately."
-        alert.alertStyle = .warning
-        alert.addButton(withTitle: "Paste")
-        alert.addButton(withTitle: "Cancel")
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-        super.paste(s)
+        // Remove embedded bracketed-paste markers before delivery. In bracketed-paste
+        // mode SwiftTerm wraps the clipboard in ESC[200~ … ESC[201~; a poisoned ESC[201~
+        // in the clipboard would otherwise close that bracket early so the bytes after
+        // it run as typed input (pastejacking). Stripping the markers leaves the shell
+        // to treat the paste as the literal data bracketed mode promises.
+        let text = Self.stripBracketedPasteMarkers(raw)
+
+        if !getTerminal().bracketedPasteMode, text.contains("\n") || text.contains("\r") {
+            let newlineCount = text.unicodeScalars.filter { $0 == "\n" || $0 == "\r" }.count
+            let alert = NSAlert()
+            alert.messageText = "Paste \(newlineCount) Line\(newlineCount == 1 ? "" : "s")?"
+            alert.informativeText = "The clipboard contains newlines. Each newline acts as Enter in the terminal and may execute commands immediately."
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "Paste")
+            alert.addButton(withTitle: "Cancel")
+            guard alert.runModal() == .alertFirstButtonReturn else { return }
+        }
+
+        // An untouched clipboard goes through SwiftTerm's own paste so kitty-keyboard
+        // encoding and bracketed wrapping stay exactly as upstream. Only a paste we had
+        // to clean is delivered here, re-wrapped to match SwiftTerm's non-kitty paste.
+        if text == raw {
+            super.paste(s)
+        } else if getTerminal().bracketedPasteMode {
+            send(data: EscapeSequences.bracketedPasteStart[0...])
+            send(txt: text)
+            send(data: EscapeSequences.bracketedPasteEnd[0...])
+        } else {
+            send(txt: text)
+        }
+    }
+
+    /// Remove the bracketed-paste start/end markers (ESC[200~ / ESC[201~) from text
+    /// about to be pasted. See `paste(_:)` for why a clipboard-embedded end marker is
+    /// dangerous.
+    nonisolated static func stripBracketedPasteMarkers(_ text: String) -> String {
+        text.replacingOccurrences(of: "\u{1B}[200~", with: "")
+            .replacingOccurrences(of: "\u{1B}[201~", with: "")
     }
 
     /// Open a clicked link — an OSC 8 payload or an implicitly-detected path.
