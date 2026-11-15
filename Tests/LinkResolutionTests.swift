@@ -136,6 +136,32 @@ struct LinkResolutionTests {
         #expect(url?.lastPathComponent == "Makefile")
     }
 
+    @Test func launchableFileTypesRefused() throws {
+        // A crafted OSC 8 link naming an existing executable-type file must NOT
+        // resolve — NSWorkspace.open would RUN these, not view them (ADR-006).
+        let (dir, _) = try Self.makeTempFile()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        for name in ["run.command", "x.terminal", "do.scpt", "s.applescript"] {
+            try Data("#!/bin/sh\n".utf8).write(to: dir.appendingPathComponent(name))
+            #expect(InterceptingTerminalView.resolveOpenableURL(for: name, cwd: dir.path) == nil,
+                    "launchable type should be refused: \(name)")
+        }
+        // `.app` is a bundle (a directory); it too must be refused.
+        let app = dir.appendingPathComponent("Evil.app", isDirectory: true)
+        try FileManager.default.createDirectory(at: app, withIntermediateDirectories: true)
+        #expect(InterceptingTerminalView.resolveOpenableURL(for: "Evil.app", cwd: dir.path) == nil)
+    }
+
+    @Test func ordinaryFileWithoutExtensionStillResolves() throws {
+        // The launchable-type guard must not reject a normal document — a plain
+        // file (even executable text) that NSWorkspace opens in a viewer.
+        let (dir, _) = try Self.makeTempFile()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try Data("notes\n".utf8).write(to: dir.appendingPathComponent("README"))
+        let url = InterceptingTerminalView.resolveOpenableURL(for: "README", cwd: dir.path)
+        #expect(url?.lastPathComponent == "README")
+    }
+
     @Test func emptyStringReturnsNil() {
         #expect(InterceptingTerminalView.resolveOpenableURL(for: "", cwd: Self.cwd) == nil)
         #expect(InterceptingTerminalView.resolveOpenableURL(for: "   ", cwd: Self.cwd) == nil)

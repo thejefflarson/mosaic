@@ -33,7 +33,8 @@ per-click Open/Cancel dialog. The gate is that the user chose to click a link
 the hand cursor already marked, the same model as iTerm/Ghostty/Terminal. The
 scheme deny-list (Decision 2) still refuses categorically-dangerous schemes,
 and a resolved file opens in its registered viewer (Preview, an editor) rather
-than executing.
+than executing — the launchable-type refusal (Decision 5) makes that true, by
+dropping the file types `NSWorkspace.open` would run instead of display.
 
 This reverses the original decision, which made an `NSAlert` the "load-bearing"
 defence. Two reasons:
@@ -122,6 +123,22 @@ resolves to `<cwd>/hello.txt`; a link with `..` segments that escape upward
 resolves to its final canonical form, so the open targets exactly that
 canonical path and nothing is smuggled through unresolved `..`.
 
+### 5. Launchable file types are refused, not opened
+
+`NSWorkspace.open` *runs* some file types rather than displaying them: `.app`
+bundles, `.command` / `.tool` scripts, `.terminal` settings files, AppleScript
+(`.scpt` / `.applescript`), Automator `.workflow` / `.action`, and anything
+whose UTI conforms to `public.application` or `public.unix-executable`.
+`resolveOpenableURL` returns `nil` for these (`isLaunchableFileURL`), so a
+crafted OSC 8 link whose text looks innocuous but whose target is an existing
+executable file cannot turn one click into code execution. Without this, the
+"opens in a viewer, not executed" guarantee in Decisions 1 and 3 would be false
+for exactly the types an attacker would choose.
+
+A refused click is a silent no-op (no viewer, no error). Revealing the file in
+Finder (`activateFileViewerSelecting`) instead of refusing outright is a
+possible future refinement; refusing is the safe default.
+
 ## Threat model summary
 
 | Threat | Mitigation |
@@ -129,6 +146,7 @@ canonical path and nothing is smuggled through unresolved `..`.
 | OSC 8 with `javascript:` / `data:` payload | Deny-list at `resolveOpenableURL` |
 | OSC 8 with unknown app scheme | Opens only on a deliberate click; deny-list blocks the dangerous schemes |
 | OSC 8 with `file:///etc/secrets` after social engineering | Opens only on a deliberate click; a file opens in its viewer, not executed |
+| OSC 8 link whose target is an existing `.app` / `.command` / executable | Refused in `resolveOpenableURL` (`isLaunchableFileURL`) — the click is a no-op, not a launch |
 | OSC 7 cwd repoint + OSC 8 relative link | Canonicalisation + must resolve to an existing file + click-gated |
 | `..`-laden link hiding the real target | `standardizedFileURL` folds segments, so the open targets the canonical path |
 | Symlink in resolved path pointing elsewhere | `resolvingSymlinksInPath` + a re-check at open time (a swap between resolve and open aborts) |
@@ -153,8 +171,9 @@ canonical path and nothing is smuggled through unresolved `..`.
 - `InterceptingTerminalView.openResolvedLink` — resolve + rate-limit + open, no dialog
 - `InterceptingTerminalView.requestOpenLink` — SwiftTerm delegate hook, not the
   dispatched witness for our subclass (Decision 1); forwards to `openResolvedLink`
-- `InterceptingTerminalView.resolveOpenableURL` — scheme deny-list, path canonicalisation
-- `InterceptingTerminalView.deniedLinkSchemes` — the deny-list
+- `InterceptingTerminalView.resolveOpenableURL` — scheme deny-list, path canonicalisation, launchable-type refusal
+- `InterceptingTerminalView.deniedLinkSchemes` — the scheme deny-list
+- `InterceptingTerminalView.isLaunchableFileURL` / `launchableFileExtensions` — the executable-type refusal (Decision 5)
 - `Tests/LinkResolutionTests.swift` — `customSchemesPassThrough`,
   `dangerousSchemesBlocked`, `fileURLResolves`, `absolutePathResolves`,
   `parentTraversalCanonicalises`

@@ -1,6 +1,7 @@
 import AppKit
 import os
 @preconcurrency import SwiftTerm
+import UniformTypeIdentifiers
 
 /// Structured log for security-relevant events in the terminal layer.
 /// Auditable via Console.app (subsystem filter: bundle ID, category: "security").
@@ -422,6 +423,26 @@ final class InterceptingTerminalView: LocalProcessTerminalView {
         "jar", "ms-its",                     // historic code-execution vectors
     ]
 
+    /// File types `NSWorkspace.open` *launches or runs* rather than displays.
+    /// Refused in `resolveOpenableURL` so a crafted OSC 8 link whose target is one
+    /// of these can't turn a single click into code execution — ADR-006's guarantee
+    /// is that a clicked file is viewed, never executed. `.app` is a bundle (a
+    /// directory), caught by the extension here before the exists-check returns it.
+    static let launchableFileExtensions: Set<String> = [
+        "app", "command", "terminal", "tool", "workflow", "action",
+        "scpt", "scptd", "applescript",
+    ]
+
+    /// True when opening `url` would execute or launch it rather than display it.
+    /// Checks the extension deny-set first, then the resolved UTI so an
+    /// extensionless Mach-O or app bundle is still caught.
+    static func isLaunchableFileURL(_ url: URL) -> Bool {
+        if launchableFileExtensions.contains(url.pathExtension.lowercased()) { return true }
+        guard let type = try? url.resourceValues(forKeys: [.contentTypeKey]).contentType
+        else { return false }
+        return type.conforms(to: .application) || type.conforms(to: .unixExecutable)
+    }
+
     /// Pure function so we can unit-test without an NSWorkspace side effect.
     static func resolveOpenableURL(for link: String, cwd: String) -> URL? {
         // Reject pathologically long inputs before any regex / canonicalisation
@@ -484,7 +505,15 @@ final class InterceptingTerminalView: LocalProcessTerminalView {
             .resolvingSymlinksInPath().standardizedFileURL.path
         var isDir: ObjCBool = false
         guard FileManager.default.fileExists(atPath: resolved, isDirectory: &isDir) else { return nil }
-        return URL(fileURLWithPath: resolved, isDirectory: isDir.boolValue)
+        let fileURL = URL(fileURLWithPath: resolved, isDirectory: isDir.boolValue)
+
+        // Refuse types NSWorkspace would run (`.app`, `.command`, executables) so a
+        // click opens a viewer, never code (ADR-006). A refused click is a no-op.
+        if isLaunchableFileURL(fileURL) {
+            securityLog.warning("link-open blocked: resolved path is a launchable type \(resolved, privacy: .private)")
+            return nil
+        }
+        return fileURL
     }
 
     /// Route find-panel actions to our custom find bar. SwiftTerm's bundled find UI
