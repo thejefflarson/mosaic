@@ -64,6 +64,21 @@ struct WorkspaceSnapshot: Codable, Sendable {
             case id, x, y, width, height, shell, cwd, title, scrollback
         }
 
+        // Explicit memberwise init: the custom `init(from:)` below suppresses the
+        // synthesized one that `TerminalController.makeSnapshots` constructs from.
+        init(id: UUID, x: CGFloat, y: CGFloat, width: CGFloat, height: CGFloat,
+             shell: String, cwd: String, title: String, scrollback: String?) {
+            self.id = id
+            self.x = x
+            self.y = y
+            self.width = width
+            self.height = height
+            self.shell = shell
+            self.cwd = cwd
+            self.title = title
+            self.scrollback = scrollback
+        }
+
         init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
             id    = try c.decode(UUID.self,    forKey: .id)
