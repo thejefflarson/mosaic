@@ -21,7 +21,6 @@ Exits 1 and prints a `warning:` line to stderr, writing nothing, on failure.
 from __future__ import annotations
 
 import argparse
-import concurrent.futures
 import json
 import re
 import sys
@@ -74,47 +73,13 @@ MAX_TOTAL_MATCHERS = 1024
 MAX_MATCHER_CHARS = 512
 
 
-# ---------------------------------------------------------------------------
-# Backtracking-safety check for regex matchers
-# ---------------------------------------------------------------------------
-
-# Probe inputs chosen to trigger exponential backtracking in classic catastrophic
-# patterns (e.g. (a+)+ or (a|aa)+). Four character classes cover the most common
-# regex atoms; the trailing "!" ensures the engine must explore all alternatives
-# before failing.
-_BACKTRACK_PROBES = [
-    "a" * 40 + "!",
-    "A" * 40 + "!",
-    "0" * 40 + "!",
-    " " * 40 + "!",
-]
-_BACKTRACK_TIMEOUT_S = 0.1  # 100 ms per probe — plenty for a safe pattern
-
-
-def _validate_regex(pattern_str: str, label: str) -> None:
-    """Compile *pattern_str* and reject patterns that exhibit catastrophic backtracking.
-
-    Raises ValidationError on syntax errors or if any probe takes longer than
-    _BACKTRACK_TIMEOUT_S to match (indicating exponential blowup).
-    """
-    try:
-        compiled = re.compile(pattern_str)
-    except re.error as exc:
-        raise ValidationError(f"{label} regex is invalid: {exc}") from exc
-
-    for probe in _BACKTRACK_PROBES:
-        ex = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-        fut = ex.submit(compiled.search, probe)
-        try:
-            fut.result(timeout=_BACKTRACK_TIMEOUT_S)
-        except concurrent.futures.TimeoutError:
-            ex.shutdown(wait=False, cancel_futures=True)
-            raise ValidationError(
-                f"{label} regex timed out on backtracking probe — "
-                f"catastrophic backtracking suspected: {pattern_str!r}"
-            )
-        finally:
-            ex.shutdown(wait=False, cancel_futures=True)
+# Matcher regexes are NOT compiled here. They are Rust/ICU `regex`-crate patterns
+# (`\x{…}`, `\p{…}`, `\u{…}`), which Python's `re` cannot parse — and the runtime
+# engine is ICU (NSRegularExpression), not Python, so a Python compile would test
+# the wrong engine anyway. herdr's own checker likewise does not compile them.
+# ReDoS is bounded at runtime by the input-length cap in AgentEngine.evaluate
+# (Docs/ADR/009-vendor-herdr-detection-manifests.md); only the length cap below
+# (MAX_MATCHER_CHARS) is enforced on each matcher here.
 
 
 class ValidationError(Exception):
@@ -266,8 +231,6 @@ def _validate_gate(
         for value in values:
             if len(value) > MAX_MATCHER_CHARS:
                 raise ValidationError(f"{label} matcher exceeds max length {MAX_MATCHER_CHARS}")
-            if key in ("regex", "line_regex"):
-                _validate_regex(value, label)
     if matcher_count > MAX_MATCHERS_PER_GATE:
         raise ValidationError(f"{label} exceeds max direct matcher count {MAX_MATCHERS_PER_GATE}")
     complexity["matchers"] += matcher_count
