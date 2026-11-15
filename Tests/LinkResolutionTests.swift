@@ -249,6 +249,32 @@ struct LinkResolutionTests {
         #expect(InterceptingTerminalView.stripBracketedPasteMarkers(text) == text)
     }
 
+    @Test func pasteStripsNeighbourSplicedEndMarker() {
+        // Deleting the embedded end marker splices "ESC[20" + "1~" into a fresh ESC[201~;
+        // a single-pass strip would leave it. The loop must remove it too.
+        let smuggled = "\u{1B}[20\u{1B}[201~1~rm -rf ~"
+        let cleaned = InterceptingTerminalView.stripBracketedPasteMarkers(smuggled)
+        #expect(!cleaned.contains("\u{1B}[201~"))
+        #expect(!cleaned.contains("\u{1B}[200~"))
+    }
+
+    @Test func pasteStripsEndMarkerThatRevealsStartMarker() {
+        // Removing the end marker here splices "ESC[20" + "0~" into ESC[200~.
+        let smuggled = "\u{1B}[20\u{1B}[201~0~ls"
+        let cleaned = InterceptingTerminalView.stripBracketedPasteMarkers(smuggled)
+        #expect(!cleaned.contains("\u{1B}[200~"))
+        #expect(!cleaned.contains("\u{1B}[201~"))
+    }
+
+    @Test func pasteNewlineGateDetectsCRLF() {
+        // Swift collapses "\r\n" into one Character, so the gate must test scalars or a
+        // CRLF-only clipboard pastes with no confirmation.
+        #expect(InterceptingTerminalView.containsPasteNewline("ls\r\nrm -rf ~"))
+        #expect(InterceptingTerminalView.containsPasteNewline("a\nb"))
+        #expect(InterceptingTerminalView.containsPasteNewline("a\rb"))
+        #expect(!InterceptingTerminalView.containsPasteNewline("single line, no newline"))
+    }
+
     // MARK: - Escape stripping (C1 coverage)
 
     @Test func stripsC1OSC() {

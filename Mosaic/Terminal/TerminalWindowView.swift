@@ -348,7 +348,7 @@ final class InterceptingTerminalView: LocalProcessTerminalView {
         // to treat the paste as the literal data bracketed mode promises.
         let text = Self.stripBracketedPasteMarkers(raw)
 
-        if !getTerminal().bracketedPasteMode, text.contains("\n") || text.contains("\r") {
+        if !getTerminal().bracketedPasteMode, Self.containsPasteNewline(text) {
             let newlineCount = text.unicodeScalars.filter { $0 == "\n" || $0 == "\r" }.count
             let alert = NSAlert()
             alert.messageText = "Paste \(newlineCount) Line\(newlineCount == 1 ? "" : "s")?"
@@ -377,9 +377,27 @@ final class InterceptingTerminalView: LocalProcessTerminalView {
     /// Remove the bracketed-paste start/end markers (ESC[200~ / ESC[201~) from text
     /// about to be pasted. See `paste(_:)` for why a clipboard-embedded end marker is
     /// dangerous.
+    ///
+    /// Loops to a fixpoint rather than stripping once: removing a marker splices its
+    /// neighbours together, which can form a fresh marker ("ESC[20" + "ESC[201~" + "1~"
+    /// → "ESC[201~"), and stripping an end marker can likewise reveal a start marker.
+    /// Each iteration removes ≥1 occurrence and shortens the string, so it terminates.
     nonisolated static func stripBracketedPasteMarkers(_ text: String) -> String {
-        text.replacingOccurrences(of: "\u{1B}[200~", with: "")
-            .replacingOccurrences(of: "\u{1B}[201~", with: "")
+        let start = "\u{1B}[200~"
+        let end = "\u{1B}[201~"
+        var out = text
+        while out.contains(start) || out.contains(end) {
+            out = out.replacingOccurrences(of: start, with: "")
+                     .replacingOccurrences(of: end, with: "")
+        }
+        return out
+    }
+
+    /// True when `text` contains a newline that would act as Enter in the terminal.
+    /// Tests unicode scalars because Swift collapses "\r\n" into a single Character, so
+    /// `contains("\n")`/`contains("\r")` both miss a CRLF-only clipboard.
+    nonisolated static func containsPasteNewline(_ text: String) -> Bool {
+        text.unicodeScalars.contains { $0 == "\n" || $0 == "\r" }
     }
 
     /// Open a clicked link — an OSC 8 payload or an implicitly-detected path.
