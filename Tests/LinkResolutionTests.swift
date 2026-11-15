@@ -227,6 +227,29 @@ struct LinkResolutionTests {
         #expect(cleaned == "echo hi\nrm -rf ~")
     }
 
+    // MARK: - Paste marker stripping (bracketed-paste breakout)
+
+    @Test func pasteStripsBracketedPasteEndMarker() {
+        // A clipboard-embedded ESC[201~ would close the shell's paste bracket early,
+        // so "echo pwned" would run as typed input rather than paste as literal text.
+        let smuggled = "echo safe\u{1B}[201~\necho pwned"
+        let cleaned = InterceptingTerminalView.stripBracketedPasteMarkers(smuggled)
+        #expect(!cleaned.contains("\u{1B}[201~"))
+        #expect(cleaned == "echo safe\necho pwned")
+    }
+
+    @Test func pasteStripsBracketedPasteStartMarker() {
+        let cleaned = InterceptingTerminalView.stripBracketedPasteMarkers("\u{1B}[200~ls -la")
+        #expect(cleaned == "ls -la")
+    }
+
+    @Test func pasteLeavesOrdinaryTextUnchanged() {
+        // No markers → byte-for-byte identical, so these pastes still take SwiftTerm's
+        // own paste path (kitty/bracketed wrapping untouched).
+        let text = "git commit -m \"fix: thing\"\nmake test"
+        #expect(InterceptingTerminalView.stripBracketedPasteMarkers(text) == text)
+    }
+
     // MARK: - Escape stripping (C1 coverage)
 
     @Test func stripsC1OSC() {
