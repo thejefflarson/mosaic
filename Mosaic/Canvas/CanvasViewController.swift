@@ -169,6 +169,9 @@ final class CanvasViewController: NSViewController {
     private let canvasView = CanvasView()
     private let minimapView = MinimapView()
     private let attentionPill = AttentionPillView()
+    private let agentsPanel = AgentsPanelView()
+    private var pillAboveMinimap: NSLayoutConstraint!
+    private var pillAbovePanel: NSLayoutConstraint!
     private let toolPalette = ToolPaletteView()
     private let fpsLabel: NSTextField = {
         let f = NSTextField(labelWithString: "")
@@ -332,6 +335,7 @@ final class CanvasViewController: NSViewController {
         }
         setupCanvas()
         setupMinimap()
+        setupAgentsPanel()
         setupAttentionPill()
         setupToolPalette()
         setupFPSOverlay()
@@ -466,16 +470,44 @@ final class CanvasViewController: NSViewController {
         }
     }
 
-    /// Docks the "N waiting" pill directly above the minimap, right-aligned to its
-    /// trailing edge (ADR 007, decision 2).
+    /// Docks the agents roster directly above the minimap, right-aligned to its trailing
+    /// edge (ADR 010). Hidden until an agent is running.
+    private func setupAgentsPanel() {
+        agentsPanel.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(agentsPanel)
+        NSLayoutConstraint.activate([
+            agentsPanel.trailingAnchor.constraint(equalTo: minimapView.trailingAnchor),
+            agentsPanel.bottomAnchor.constraint(equalTo: minimapView.topAnchor, constant: -8),
+        ])
+        agentsPanel.onSelect = { [weak self] id in
+            guard let self, let tw = terminalController.windows.first(where: { $0.id == id }) else { return }
+            terminalController.snapViewportToTerminal(tw)
+        }
+    }
+
+    /// Docks the "N waiting" pill above the agents panel while it is visible, otherwise
+    /// directly above the minimap, right-aligned to its trailing edge (ADR 007, decision 2).
     private func setupAttentionPill() {
         attentionPill.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(attentionPill)
+        pillAboveMinimap = attentionPill.bottomAnchor.constraint(equalTo: minimapView.topAnchor, constant: -8)
+        pillAbovePanel = attentionPill.bottomAnchor.constraint(equalTo: agentsPanel.topAnchor, constant: -8)
         NSLayoutConstraint.activate([
             attentionPill.trailingAnchor.constraint(equalTo: minimapView.trailingAnchor),
-            attentionPill.bottomAnchor.constraint(equalTo: minimapView.topAnchor, constant: -8),
+            pillAboveMinimap,
         ])
         attentionPill.onClick = { [weak self] in self?.jumpToWaitingTerminal() }
+    }
+
+    /// Refreshes the roster on the same fire as the minimap and pill (no separate timer),
+    /// and re-docks the pill so a hidden panel leaves no gap.
+    private func updateAgentsPanel() {
+        let snapshots = terminalController.agentSnapshots()
+        let reserved = minimapView.frame.height + attentionPill.frame.height + 16 + 8 + 8 + 16
+        agentsPanel.update(snapshots: snapshots, maxHeight: view.bounds.height - reserved)
+        let panelVisible = !snapshots.isEmpty
+        pillAboveMinimap.isActive = !panelVisible
+        pillAbovePanel.isActive = panelVisible
     }
 
     // MARK: - Zoom label
@@ -919,6 +951,7 @@ final class CanvasViewController: NSViewController {
         // live without a dedicated poll or a second onChange wiring.
         let waiting = terminalController.waitingCount
         attentionPill.count = waiting
+        updateAgentsPanel()
         // VoiceOver: the minimap's raster dots aren't individually reachable, so speak
         // the waiting count as the map's value (role stays .image, label "Minimap").
         minimapView.setAccessibilityValue(

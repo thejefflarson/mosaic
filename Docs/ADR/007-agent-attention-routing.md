@@ -120,3 +120,14 @@ unnecessary, and impersonating a terminal we aren't is dishonest and invites emu
 escape sequences we don't fully support. A `Stop` hook in `~/.claude/settings.json` (emitting
 OSC 777) remains available to a user who wants instant, exact, config-based detection instead of
 the heuristic.
+
+## Update (2026-11) — an agents roster is built, scoped to the roster
+
+Decision 2 deferred a roster panel until window count outgrew minimap legibility. A roster
+answers a question the minimap cannot render at any window count: *which agent is this, and is it
+working, idle, or waiting on me?* The minimap draws a status dot per rect but carries no identity,
+group, or reason text. The roster is therefore built now as a sibling overlay above the minimap
+([ADR 010](010-agents-view-roster.md)), scoped to listing and jumping to terminals. Inbox verbs
+(answering, approving, dismissing from the panel) stay deferred. The panel reuses this ADR's
+palette and shape channel and adds no motion: Working is a static dim dot, so the pulse stays
+confined to the pill and title-bar indicator.
