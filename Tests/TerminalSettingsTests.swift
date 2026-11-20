@@ -30,6 +30,23 @@ struct TerminalSettingsTests {
         #expect(TerminalSettings().useBrightColors == true)
     }
 
+    @Test func defaultAgentsPanelEnabled() {
+        #expect(TerminalSettings().agentsPanelEnabled == true)
+    }
+
+    @Test func agentsPanelEnabledMissingKeyDecodesAsOn() throws {
+        let decoded = try JSONDecoder().decode(TerminalSettings.self, from: Data("{}".utf8))
+        #expect(decoded.agentsPanelEnabled == true)
+    }
+
+    @Test func agentsPanelEnabledRoundTrips() throws {
+        var s = TerminalSettings()
+        s.agentsPanelEnabled = false
+        let decoded = try JSONDecoder().decode(
+            TerminalSettings.self, from: JSONEncoder().encode(s))
+        #expect(decoded.agentsPanelEnabled == false)
+    }
+
     // MARK: - JSON round-trip
 
     @Test func jsonRoundTripPreservesAllFields() throws {

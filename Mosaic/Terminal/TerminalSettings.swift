@@ -27,6 +27,9 @@ struct TerminalSettings: Codable {
     /// leaks through Time Machine / iCloud Drive of Application Support /
     /// `tar` of the home directory.
     var persistScrollback: Bool = false
+    /// Master switch for the auto-appearing Agents panel. Persisted on purpose: it is a
+    /// feature preference, unlike the panel's per-session layout state.
+    var agentsPanelEnabled: Bool = true
 
     init() {}
 
@@ -50,6 +53,7 @@ struct TerminalSettings: Codable {
         self.panOnBell              = try c.decodeIfPresent(Bool.self,             forKey: .panOnBell)              ?? self.panOnBell
         self.flashOnBell            = try c.decodeIfPresent(Bool.self,             forKey: .flashOnBell)            ?? self.flashOnBell
         self.persistScrollback      = try c.decodeIfPresent(Bool.self,             forKey: .persistScrollback)      ?? self.persistScrollback
+        self.agentsPanelEnabled     = try c.decodeIfPresent(Bool.self,             forKey: .agentsPanelEnabled)     ?? self.agentsPanelEnabled
     }
 
     // MARK: - Persistence
