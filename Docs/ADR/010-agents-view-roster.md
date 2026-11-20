@@ -40,3 +40,10 @@ an `ActivityState` comparison.
 - No visible change on its own; later tickets build the roster over these properties.
 - `onActivityChange` fires somewhat more often; its consumers (minimap, pill) must stay cheap and
   idempotent.
+
+## Group mapping
+
+`AgentRoster.group` assigns each snapshot a group by precedence: `needsAttention` or
+`agentActivity == .blocked` → Needs you; else `agentActivity == .working` or `busy` → Working;
+else Idle. Blocked, finished and exit-N are row sublabels, not groups. Rows order by group, then
+needs-you and working by `stateSince` ascending, idle by `stateSince` descending.

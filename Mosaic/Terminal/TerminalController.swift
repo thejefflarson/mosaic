@@ -485,4 +485,18 @@ final class TerminalController {
         guard let id = WaitingQueue.oldestWaiting(in: candidates) else { return nil }
         return waiting.first { $0.id == id }
     }
+
+    // MARK: - Agents View (ADR 010)
+
+    /// Value snapshots of every terminal running a recognized agent, in roster order.
+    /// Holds no view references; resolve a row's `id` against `windows` at click time.
+    func agentSnapshots() -> [AgentSnapshot] {
+        AgentRoster.ordered(windows.compactMap { w in
+            guard let agentID = w.agentID else { return nil }
+            return AgentSnapshot(
+                id: w.id, title: w.currentTitle, cwd: w.currentCwd, agentID: agentID,
+                agentActivity: w.lastAgentActivity, activityState: w.activityState,
+                stateSince: w.stateSince)
+        })
+    }
 }
