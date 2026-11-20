@@ -656,6 +656,15 @@ final class TerminalWindowView: NSView {
     /// for the raise/promote/clear rules.
     var attentionRaisedAt: TimeInterval? { activity.attentionRaisedAt }
 
+    /// Identity and post-hold herdr state of the agent in this terminal's foreground,
+    /// retained from `driveAgentActivity` for the agents roster; both nil when the
+    /// foreground isn't a recognized agent. `stateSince` moves only when
+    /// `lastAgentActivity` changes value — best-effort, for display. See
+    /// Docs/ADR/010-agents-view-roster.md.
+    private(set) var agentID: String?
+    private(set) var lastAgentActivity: AgentActivity?
+    private(set) var stateSince = Date()
+
     // MARK: - Subviews
 
     private let titleBar = TitleBarView()
@@ -1211,10 +1220,13 @@ final class TerminalWindowView: NSView {
         let manifests = Self.manifestStore.manifestsByID
         guard let agentID = ForegroundAgentIdentifier.identify(termView: termView, manifests: manifests),
               let manifest = manifests[agentID] else {
+            retainAgent(id: nil, activity: nil)
             return false
         }
         let result = AgentEngine.evaluate(manifest: manifest, screen: visibleScreenText(), title: currentTitle)
-        switch skipStateUpdateHold.apply(result) {
+        let held = skipStateUpdateHold.apply(result)
+        retainAgent(id: agentID, activity: held)
+        switch held {
         case .working:
             agentWasWorking = true
             if quietElapsed { rescheduleSilenceDebounce() }   // paused mid-turn; keep watching
@@ -1240,6 +1252,17 @@ final class TerminalWindowView: NSView {
             }
             return false                                      // not an agent → generic heuristic
         }
+    }
+
+    /// Fires `onActivityChange` on any retained-value change: busy → working flips
+    /// `agentWasWorking` without a reducer event, so `ActivityState` alone never
+    /// signals it (ADR 010).
+    private func retainAgent(id: String?, activity: AgentActivity?) {
+        guard id != agentID || activity != lastAgentActivity else { return }
+        if activity != lastAgentActivity { stateSince = Date() }
+        agentID = id
+        lastAgentActivity = activity
+        onActivityChange?()
     }
 
     private func setup() {
