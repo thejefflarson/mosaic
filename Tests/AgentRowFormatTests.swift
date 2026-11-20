@@ -53,10 +53,14 @@ struct AgentRowFormatTests {
     }
 
     @Test func contentHeightSkipsEmptyGroups() {
-        #expect(AgentRowFormat.contentHeight(for: []) == 16)
+        let pad: CGFloat = AgentRowFormat.panelPadding * 2
+        let header: CGFloat = AgentRowFormat.headerHeight
+        let needsRow: CGFloat = AgentRowFormat.rowHeightNeedsYou
+        let compact: CGFloat = AgentRowFormat.rowHeightCompact
         let idle = snap()
-        #expect(AgentRowFormat.contentHeight(for: [idle]) == 16 + 24 + 28)
         let needs = snap(activity: .blocked)
-        #expect(AgentRowFormat.contentHeight(for: [needs, idle, idle]) == 16 + (24 + 44) + (24 + 56))
+        #expect(AgentRowFormat.contentHeight(for: []) == pad)
+        #expect(AgentRowFormat.contentHeight(for: [idle]) == pad + header + compact)
+        #expect(AgentRowFormat.contentHeight(for: [needs, idle, idle]) == pad + (header + needsRow) + (header + 2 * compact))
     }
 }
