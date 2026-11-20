@@ -505,7 +505,7 @@ final class CanvasViewController: NSViewController {
         let snapshots = terminalController.agentSnapshots()
         let reserved = minimapView.frame.height + attentionPill.frame.height + 16 + 8 + 8 + 16
         agentsPanel.update(snapshots: snapshots, maxHeight: view.bounds.height - reserved)
-        let panelVisible = !snapshots.isEmpty
+        let panelVisible = TerminalSettings.shared.agentsPanelEnabled && !snapshots.isEmpty
         pillAboveMinimap.isActive = !panelVisible
         pillAbovePanel.isActive = panelVisible
     }
@@ -815,6 +815,11 @@ final class CanvasViewController: NSViewController {
         let corrDX = snap.rect.minX - snapTarget.minX
         let corrDY = snap.rect.minY - snapTarget.minY
         return proposed.offsetBy(dx: corrDX, dy: corrDY)
+    }
+
+    @objc func toggleAgentsPanel(_ sender: Any?) {
+        TerminalSettings.shared.agentsPanelEnabled.toggle()
+        updateAgentsPanel()
     }
 
     @objc func toggleSnapping() {
@@ -1172,6 +1177,9 @@ extension CanvasViewController: NSMenuItemValidation {
         }
         if menuItem.action == #selector(toggleBroadcast) {
             menuItem.state = terminalController.broadcastMode ? .on : .off
+        }
+        if menuItem.action == #selector(toggleAgentsPanel(_:)) {
+            menuItem.state = TerminalSettings.shared.agentsPanelEnabled ? .on : .off
         }
         if menuItem.action == #selector(toggleSnapping) {
             menuItem.state = toolPalette.snappingEnabled ? .on : .off

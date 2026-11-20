@@ -273,6 +273,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         jumpToWaitingItem.keyEquivalentModifierMask = [.command, .option]
         windowMenu.addItem(jumpToWaitingItem)
 
+        let agentsItem = NSMenuItem(
+            title: "Agents",
+            action: #selector(CanvasViewController.toggleAgentsPanel(_:)),
+            keyEquivalent: "a")
+        agentsItem.keyEquivalentModifierMask = [.command, .option]
+        windowMenu.addItem(agentsItem)
+
         windowMenu.addItem(NSMenuItem.separator())
         windowMenu.addItem(withTitle: "Bring All to Front",
                            action: #selector(NSApplication.arrangeInFront(_:)),
