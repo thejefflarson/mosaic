@@ -1415,11 +1415,15 @@ final class TerminalWindowView: NSView {
     /// blank-line detection still works.
     static func bufferRows(from data: Data) -> [String] {
         data.split(separator: 0x0A, omittingEmptySubsequences: false).map { chunk in
-            var scalars = String(decoding: chunk, as: UTF8.self).unicodeScalars
-            while let last = scalars.last, last == " " || last == "\t" || last == "\r" {
-                scalars.removeLast()
+            // Trim on the String, not its `.unicodeScalars` view: because the split was
+            // on the raw `0x0A` byte, a chunk can never contain a `\n`, so a trailing
+            // `\r` is a standalone Character (no `\r\n` grapheme can span a chunk) and
+            // Character-level `removeLast()` is both safe and correct.
+            var row = String(decoding: chunk, as: UTF8.self)
+            while let last = row.last, last == " " || last == "\t" || last == "\r" {
+                row.removeLast()
             }
-            return String(scalars)
+            return row
         }
     }
 
