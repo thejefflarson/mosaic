@@ -1409,12 +1409,14 @@ final class TerminalWindowView: NSView {
     /// Splitting on the raw `0x0A` byte, not on a Swift `Character`, matters: a row
     /// that ends in `\r` and the `\n` row separator form one `"\r\n"` grapheme, so a
     /// `Character`-level split would miss that boundary and join two rows (the CRLF
-    /// gotcha in `feedback_swift_crlf_split.md`). Right-trimming spaces reproduces the
-    /// old per-row `translateToString(trimRight:)` so blank-line detection still works.
+    /// gotcha in `feedback_swift_crlf_split.md`). Splitting on the byte strands that
+    /// `\r` on the end of the preceding row, so the trailing trim drops `\r` along with
+    /// spaces/tabs — reproducing the old per-row `translateToString(trimRight:)` so
+    /// blank-line detection still works.
     static func bufferRows(from data: Data) -> [String] {
         data.split(separator: 0x0A, omittingEmptySubsequences: false).map { chunk in
             var scalars = String(decoding: chunk, as: UTF8.self).unicodeScalars
-            while let last = scalars.last, last == " " || last == "\t" {
+            while let last = scalars.last, last == " " || last == "\t" || last == "\r" {
                 scalars.removeLast()
             }
             return String(scalars)
