@@ -49,6 +49,7 @@ jobs:
           xcodebuild build \
             -scheme Mosaic \
             -destination 'platform=macOS' \
+            -skipPackagePluginValidation \
             CODE_SIGNING_ALLOWED=NO
 
       - name: Test
@@ -56,4 +57,5 @@ jobs:
           xcodebuild test \
             -scheme MosaicTests \
             -destination 'platform=macOS' \
+            -skipPackagePluginValidation \
             CODE_SIGNING_ALLOWED=NO

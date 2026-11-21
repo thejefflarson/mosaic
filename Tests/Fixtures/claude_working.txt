@@ -1,0 +1,2 @@
+Reading TerminalWindowView.swift
+⏵ Running a command… (esc to interrupt · ctrl+t to show todos)

@@ -63,3 +63,25 @@ today's observable behavior — Mosaic never surfaced progress bars.
 - **Fork SwiftTerm to make `case 9` dispatch both progress and a notification callback** — more
   maintenance surface than a one-line handler registration, for a progress feature Mosaic doesn't
   use.
+
+## 2026-11 update — SwiftTerm v2 migration
+
+SwiftTerm v2 made the mutable `Terminal` (and `parser.oscHandlers`) internal, so the
+handler-*replacement* mechanism this ADR describes is no longer reachable from Mosaic. v2 provides
+`TerminalView.observeOscEvents(codes:_:)` instead: a passive observer that receives a copy of each
+matching OSC sequence (`TerminalOscEvent.payload` is the bytes after the `<code>;` separator —
+exactly what the old `oscHandlers[code]` closures received) while leaving the view's own OSC
+handling in place.
+
+`registerOSCHandlers()` now subscribes to codes 9, 777, and 133 through `observeOscEvents` and keeps
+the returned `TerminalOscObservation` token alive for the view's lifetime. The notification posture
+is unchanged: same 8 KB payload cap, same `sanitizeForClipboard` + `sanitizeNotificationText` chain,
+same ≤10/min rate limit, and `9;4;…` progress payloads are still ignored, so this ADR's observable
+behaviour holds.
+
+The one semantic change is that the decision's "clobbers SwiftTerm's native OSC 9;4 progress path"
+consequence **no longer applies**: `observeOscEvents` observes rather than replaces, so v2's own OSC
+handling (any native 9;4 progress UI, and the OSC 133 semantic-prompt tracking the v1 override used
+to suppress) now runs alongside our observer. Mosaic still surfaces nothing of its own for 9;4, so
+the user-visible result is the same; a reviewer should note this is now an *addition*, not an
+override, which is strictly less invasive than the original decision.

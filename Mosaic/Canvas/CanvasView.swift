@@ -308,10 +308,9 @@ final class CanvasView: FlippedView {
             let shouldShow = tw.frame.intersects(visible)
             if tw.isHidden == shouldShow {   // state actually changed
                 tw.isHidden = !shouldShow
-                // On reveal, repaint from the live buffer: rows fed while hidden
-                // cleared SwiftTerm's update range without painting, so AppKit's
-                // auto-redraw-on-unhide can draw a stale frame.
-                if shouldShow { tw.forceFullRedraw() }
+                // On reveal, SwiftTerm v2's frame driver resumes rendering from the
+                // live buffer (it suspends/resumes on view visibility), so no manual
+                // repaint nudge is needed as it was under v1's CoreGraphics renderer.
             }
         }
     }
