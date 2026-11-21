@@ -65,7 +65,11 @@ struct TerminalActivityModel {
     /// attention.
     static let busyThreshold: TimeInterval = 15
     /// Silence after a qualifying busy period, after which attention is raised.
-    static let quietThreshold: TimeInterval = 4
+    /// Also paces the agent screen-scrape re-classification (the silence debounce in
+    /// `TerminalWindowView` reschedules on `quietThreshold`), so it doubles as the
+    /// ceiling on how long an agent's working→idle transition takes to surface. Kept
+    /// at 1s so every state change shows within ~1s.
+    static let quietThreshold: TimeInterval = 1
 
     // MARK: Bookkeeping
 

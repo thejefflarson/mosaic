@@ -6,6 +6,11 @@ enum AgentRowFormat {
     static let rowHeightNeedsYou: CGFloat = 44
     static let rowHeightCompact: CGFloat = 40
     static let headerHeight: CGFloat = 24
+    /// The first header needs no separation gap above it (nothing precedes it), so it
+    /// is shorter than a mid-panel header — otherwise the bottom-aligned title leaves
+    /// a top-heavy gap above the first group. Later headers keep `headerHeight` for
+    /// inter-group separation.
+    static let firstHeaderHeight: CGFloat = 18
     static let panelPadding: CGFloat = 8
     /// Smaller than `panelPadding`: the first group header already carries visual
     /// space above its baseline, so a full pad on top reads as too much.
@@ -78,9 +83,13 @@ enum AgentRowFormat {
     /// Total content height for `snapshots`, used to size the panel up to its cap.
     static func contentHeight(for snapshots: [AgentSnapshot]) -> CGFloat {
         var height = panelTopPadding + panelPadding
+        var isFirst = true
         for group in AgentGroup.allCases {
             let count = snapshots.filter { AgentRoster.group(for: $0) == group }.count
-            if count > 0 { height += headerHeight + CGFloat(count) * rowHeight(for: group) }
+            if count > 0 {
+                height += (isFirst ? firstHeaderHeight : headerHeight) + CGFloat(count) * rowHeight(for: group)
+                isFirst = false
+            }
         }
         return height
     }

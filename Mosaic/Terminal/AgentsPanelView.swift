@@ -19,13 +19,14 @@ private struct AgentsPanelSwiftUIView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                ForEach(AgentGroup.allCases, id: \.self) { group in
+                let groups = AgentGroup.allCases.filter { g in
+                    model.snapshots.contains { AgentRoster.group(for: $0) == g }
+                }
+                ForEach(Array(groups.enumerated()), id: \.element) { index, group in
                     let rows = model.snapshots.filter { AgentRoster.group(for: $0) == group }
-                    if !rows.isEmpty {
-                        header(group, count: rows.count)
-                        ForEach(rows, id: \.id) { row in
-                            AgentRowView(snapshot: row, group: group) { model.onSelect?(row.id) }
-                        }
+                    header(group, count: rows.count, isFirst: index == 0)
+                    ForEach(rows, id: \.id) { row in
+                        AgentRowView(snapshot: row, group: group) { model.onSelect?(row.id) }
                     }
                 }
             }
@@ -42,13 +43,14 @@ private struct AgentsPanelSwiftUIView: View {
         .environment(\.colorScheme, .dark)
     }
 
-    private func header(_ group: AgentGroup, count: Int) -> some View {
+    private func header(_ group: AgentGroup, count: Int, isFirst: Bool) -> some View {
         Text("\(AgentRowFormat.groupTitle(group)) · \(count)")
             .font(.system(size: 10, weight: .semibold))
             .textCase(.uppercase)
             .foregroundStyle(.primary)
             .padding(.horizontal, 6)
-            .frame(height: AgentRowFormat.headerHeight, alignment: .bottom)
+            .frame(height: isFirst ? AgentRowFormat.firstHeaderHeight : AgentRowFormat.headerHeight,
+                   alignment: .bottom)
             .accessibilityAddTraits(.isHeader)
     }
 }

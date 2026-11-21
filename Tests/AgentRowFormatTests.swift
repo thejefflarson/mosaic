@@ -71,12 +71,15 @@ struct AgentRowFormatTests {
     @Test func contentHeightSkipsEmptyGroups() {
         let pad: CGFloat = AgentRowFormat.panelTopPadding + AgentRowFormat.panelPadding
         let header: CGFloat = AgentRowFormat.headerHeight
+        let firstHeader: CGFloat = AgentRowFormat.firstHeaderHeight
         let needsRow: CGFloat = AgentRowFormat.rowHeightNeedsYou
         let compact: CGFloat = AgentRowFormat.rowHeightCompact
         let idle = snap()
         let needs = snap(activity: .blocked)
         #expect(AgentRowFormat.contentHeight(for: []) == pad)
-        #expect(AgentRowFormat.contentHeight(for: [idle]) == pad + header + compact)
-        #expect(AgentRowFormat.contentHeight(for: [needs, idle, idle]) == pad + (header + needsRow) + (header + 2 * compact))
+        // Single group: its header is the first, so it uses the shorter height.
+        #expect(AgentRowFormat.contentHeight(for: [idle]) == pad + firstHeader + compact)
+        // First group (needs-you) uses firstHeader; the later group keeps headerHeight.
+        #expect(AgentRowFormat.contentHeight(for: [needs, idle, idle]) == pad + (firstHeader + needsRow) + (header + 2 * compact))
     }
 }

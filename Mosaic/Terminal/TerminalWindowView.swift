@@ -1289,11 +1289,38 @@ final class TerminalWindowView: NSView {
         // regardless of the system-wide appearance setting.
         termView.appearance = NSAppearance(named: .darkAqua)
 
+        // The canvas magnifies terminals with a bounds transform. v2's default CPU
+        // renderer rasterizes a glyph bitmap at the window backing scale, which the
+        // zoom then upscales (soft, unevenly-spaced text). The Metal path re-rasterizes
+        // at an arbitrary scale via `metalScaleFactorOverride`, which `updateRenderScale`
+        // drives from the live zoom. Falls back to CPU if Metal is unavailable.
+        try? termView.setUseMetal(true)
+
         registerOSCHandlers()
         Self.installSharedMonitors()
         startSilenceDebounce()
 
         startProcess()
+    }
+
+    /// Match the Metal renderer's rasterization scale to how large this terminal is
+    /// actually drawn on screen, so magnified text stays crisp. The canvas scales
+    /// terminals with a bounds transform; `zoom` is that factor. Clamped so a deep
+    /// zoom-in can't allocate an unbounded Metal drawable — past the cap a little
+    /// softness is acceptable. A no-op below 1× (zoomed out minifies cleanly at the
+    /// native scale).
+    func updateRenderScale(zoom: CGFloat) {
+        let backing = window?.backingScaleFactor ?? 2
+        termView.metalScaleFactorOverride = backing * min(max(zoom, 1), 4)
+    }
+
+    /// Force an immediate Metal frame. The canvas pans by moving `worldView`'s bounds,
+    /// which repositions this view on screen without changing its own frame — so the
+    /// Metal surface isn't told to redraw and its last frame lingers in the old spot
+    /// (the top row slid under the title bar until the next real draw). Called on each
+    /// viewport change for on-screen terminals to keep the surface pinned to the view.
+    func redrawNow() {
+        termView.drawMetalFrameNow()
     }
 
     // MARK: - OSC handlers
