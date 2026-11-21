@@ -59,3 +59,16 @@ jobs:
             -destination 'platform=macOS' \
             -skipPackagePluginValidation \
             CODE_SIGNING_ALLOWED=NO
+
+      # Temporary: the v2 test host crashes while preparing to run tests. Dump the
+      # crash report's backtrace inline so the cause is readable without a local run.
+      - name: Dump crash reports on failure
+        if: failure()
+        run: |
+          echo "=== DiagnosticReports ==="
+          ls -la ~/Library/Logs/DiagnosticReports/ 2>/dev/null || echo "(none)"
+          for f in ~/Library/Logs/DiagnosticReports/Mosaic*.ips ~/Library/Logs/DiagnosticReports/xctest*.ips; do
+            [ -f "$f" ] || continue
+            echo "=== $f ==="
+            cat "$f"
+          done
