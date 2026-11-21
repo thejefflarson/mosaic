@@ -200,8 +200,10 @@ struct TerminalActivityModelTests {
         var model = TerminalActivityModel()
         #expect(model.reduce(.outputActivity(at: 0)) == .busy)
         #expect(model.reduce(.outputActivity(at: 15)) == .busy)
-        // Only 2s of silence (< quietThreshold).
-        #expect(model.reduce(.quietElapsed(at: 17)) == .quiet)
+        // Silence shorter than quietThreshold, so attention is not raised. Tracks the
+        // constant so tuning the threshold doesn't silently invalidate this case.
+        let shortSilence = TerminalActivityModel.quietThreshold / 2
+        #expect(model.reduce(.quietElapsed(at: 15 + shortSilence)) == .quiet)
     }
 
     @Test func quietElapsedWithoutPriorBusyPeriodIsNoOp() {
