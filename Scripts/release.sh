@@ -220,15 +220,22 @@ xcrun stapler staple "$DMG"
 # ── Sign DMG for Sparkle & update appcast ─────────────────────────────────────
 
 echo "→ signing DMG for Sparkle"
-# Narrow the find pattern to the SPM-resolved artifact directory (more
-# specific than the previous `*/sparkle/Sparkle/bin/*`) so an arbitrary
-# DerivedData drop-in is less likely to win. Multiple candidates are normal
-# (one per Xcode project that depends on Sparkle); they should be byte-
-# identical. Dedup by SHA256 and only refuse when the binaries genuinely
-# differ — that mismatch is the actual tamper signal.
+# Scope the sign_update lookup to the DerivedData this build actually used, not
+# every Mosaic-* DerivedData on the machine. A global scan sees sign_update from
+# unrelated checkouts/worktrees pinned to other Sparkle versions, whose binaries
+# legitimately differ — and the version-mismatch guard below then refuses a
+# release that is in fact clean. BUILD_DIR is `<DerivedData>/Mosaic-xxxx/Build/
+# Products`; strip the tail to get this checkout's DerivedData root, and the
+# resolved Sparkle there matches the one just linked into the archive. Dedup by
+# SHA256 and only refuse on a genuine mismatch — that is the real tamper signal.
 SIGN_UPDATE=$(command -v sign_update 2>/dev/null || true)
 if [[ -z "$SIGN_UPDATE" ]]; then
-    CANDIDATES=$(find ~/Library/Developer/Xcode/DerivedData \
+    DD_ROOT=$(xcodebuild -showBuildSettings -scheme "$APP_NAME" -configuration Release \
+        -IDEPackageSupportDisableManifestSandbox=1 2>/dev/null \
+        | awk '/ BUILD_DIR =/{print $3; exit}' | sed 's#/Build/Products$##')
+    # Fall back to the global scan only if the scoped root can't be resolved.
+    SCAN_ROOT="${DD_ROOT:-$HOME/Library/Developer/Xcode/DerivedData}"
+    CANDIDATES=$(find "$SCAN_ROOT" \
         -path "*/SourcePackages/artifacts/sparkle/Sparkle/bin/sign_update" \
         2>/dev/null)
     if [[ -n "$CANDIDATES" ]]; then
