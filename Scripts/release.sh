@@ -131,6 +131,7 @@ xcodebuild test \
     -scheme MosaicTests \
     -destination 'platform=macOS' \
     -IDEPackageSupportDisableManifestSandbox=1 \
+    -skipPackagePluginValidation \
     -quiet
 
 # ── Generate & archive ────────────────────────────────────────────────────────
@@ -153,6 +154,7 @@ xcodebuild archive \
     -archivePath "$ARCHIVE" \
     "${SIGN_ARGS[@]}" \
     -IDEPackageSupportDisableManifestSandbox=1 \
+    -skipPackagePluginValidation \
     -quiet
 
 # ── Export ────────────────────────────────────────────────────────────────────
