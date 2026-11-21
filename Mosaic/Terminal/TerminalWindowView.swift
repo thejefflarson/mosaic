@@ -1413,7 +1413,7 @@ final class TerminalWindowView: NSView {
     /// `\r` on the end of the preceding row, so the trailing trim drops `\r` along with
     /// spaces/tabs — reproducing the old per-row `translateToString(trimRight:)` so
     /// blank-line detection still works.
-    static func bufferRows(from data: Data) -> [String] {
+    nonisolated static func bufferRows(from data: Data) -> [String] {
         data.split(separator: 0x0A, omittingEmptySubsequences: false).map { chunk in
             // Trim on the String, not its `.unicodeScalars` view: because the split was
             // on the raw `0x0A` byte, a chunk can never contain a `\n`, so a trailing
@@ -1429,7 +1429,7 @@ final class TerminalWindowView: NSView {
 
     /// Keep the last `keepLines` rows, cap each to `lineCharCap`, drop trailing blank
     /// rows, join with CRLF, and cap the whole thing to `totalCharCap` from the end.
-    static func scrollbackCapture(rows: [String], lineCharCap: Int, keepLines: Int, totalCharCap: Int) -> String {
+    nonisolated static func scrollbackCapture(rows: [String], lineCharCap: Int, keepLines: Int, totalCharCap: Int) -> String {
         var lines = rows.map { $0.count > lineCharCap ? String($0.prefix(lineCharCap)) : $0 }
         if lines.count > keepLines { lines.removeFirst(lines.count - keepLines) }
         while lines.last?.isEmpty == true { lines.removeLast() }
@@ -1576,7 +1576,7 @@ final class TerminalWindowView: NSView {
     /// Count case-insensitive, overlapping-free occurrences of `term` across `rows`,
     /// stopping after `maxRows` rows or `totalByteCap` bytes of (capped, lowercased)
     /// text, whichever comes first.
-    static func matchCount(rows: [String], term: String, perRowCap: Int, maxRows: Int, totalByteCap: Int) -> Int {
+    nonisolated static func matchCount(rows: [String], term: String, perRowCap: Int, maxRows: Int, totalByteCap: Int) -> Int {
         guard !term.isEmpty else { return 0 }
         let lower = term.lowercased()
         var count = 0
