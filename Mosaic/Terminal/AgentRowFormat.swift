@@ -4,9 +4,12 @@ import Foundation
 /// they can be unit tested.
 enum AgentRowFormat {
     static let rowHeightNeedsYou: CGFloat = 44
-    static let rowHeightCompact: CGFloat = 28
+    static let rowHeightCompact: CGFloat = 40
     static let headerHeight: CGFloat = 24
     static let panelPadding: CGFloat = 8
+    /// Smaller than `panelPadding`: the first group header already carries visual
+    /// space above its baseline, so a full pad on top reads as too much.
+    static let panelTopPadding: CGFloat = 2
 
     enum Glyph: Equatable { case filledCircle, hollowCircle, triangle }
 
@@ -39,6 +42,19 @@ enum AgentRowFormat {
         return AgentRoster.group(for: snapshot) == .idle ? .hollowCircle : .filledCircle
     }
 
+    /// The row's second line: the agent's session title (the OSC title the desktop
+    /// alerts use), prefixed with the needs-you reason when there is one. nil when the
+    /// agent has set no title and there's no reason — then the row stays single-line.
+    static func subtitle(for snapshot: AgentSnapshot) -> String? {
+        let title = snapshot.title.trimmingCharacters(in: .whitespaces)
+        switch (reason(for: snapshot), title.isEmpty) {
+        case (let reason?, false): return "\(reason) · \(title)"
+        case (let reason?, true): return reason
+        case (nil, false): return title
+        case (nil, true): return nil
+        }
+    }
+
     /// Reason line for needs-you rows; nil for other groups.
     static func reason(for snapshot: AgentSnapshot) -> String? {
         guard AgentRoster.group(for: snapshot) == .needsYou else { return nil }
@@ -61,7 +77,7 @@ enum AgentRowFormat {
 
     /// Total content height for `snapshots`, used to size the panel up to its cap.
     static func contentHeight(for snapshots: [AgentSnapshot]) -> CGFloat {
-        var height = panelPadding * 2
+        var height = panelTopPadding + panelPadding
         for group in AgentGroup.allCases {
             let count = snapshots.filter { AgentRoster.group(for: $0) == group }.count
             if count > 0 { height += headerHeight + CGFloat(count) * rowHeight(for: group) }

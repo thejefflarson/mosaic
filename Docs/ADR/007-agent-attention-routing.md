@@ -131,3 +131,23 @@ group, or reason text. The roster is therefore built now as a sibling overlay ab
 (answering, approving, dismissing from the panel) stay deferred. The panel reuses this ADR's
 palette and shape channel and adds no motion: Working is a static dim dot, so the pulse stays
 confined to the pill and title-bar indicator.
+
+## Update (2026-11): roster status dots — colorblind-safe palette, herdr-driven state
+
+Two refinements to the roster panel's status dot ([ADR 010](010-agents-view-roster.md)),
+superseding the "Working is a static dim dot" note above for the panel (the pill and
+title-bar indicator are unchanged):
+
+- **State comes from the herdr `agentActivity` (ADR 009), not `ActivityState.busy`.** Every
+  roster row is a *recognized* agent, and a running agent's TUI redraws constantly (spinner,
+  token counter), which keeps the generic output reducer `.busy` even while the agent sits
+  idle at its prompt. Classifying that as "working" pinned every agent to the working group
+  permanently. The roster now reads the manifest's `working`/`idle`/`blocked` directly;
+  `.busy` is consulted only when the manifest yields no opinion. (The pill and dock badge,
+  which cover non-agent terminals too, still use `ActivityState`.)
+- **Colorblind-safe palette.** The dot encodes state with Okabe-Ito blue (`#0072B2`,
+  working) and amber (`#E69F00`, needs-you) plus a neutral gray (idle) — distinct under the
+  common red-green and blue-yellow deficiencies, unlike a red/green/yellow traffic light. A
+  nonzero exit is additionally drawn as a *triangle* rather than a circle, so the one state
+  the user must not miss carries a color-independent shape cue. This is a deliberate move
+  away from a pure traffic-light scheme a naive reviewer might expect.

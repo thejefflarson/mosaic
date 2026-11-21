@@ -29,10 +29,16 @@ private struct AgentsPanelSwiftUIView: View {
                     }
                 }
             }
-            .padding(AgentRowFormat.panelPadding)
+            .padding(.horizontal, AgentRowFormat.panelPadding)
+            .padding(.bottom, AgentRowFormat.panelPadding)
+            .padding(.top, AgentRowFormat.panelTopPadding)
         }
         .frame(width: AgentsPanelView.width)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
+        .overlay(
+            // Same hairline as the minimap and pill (NSColor white 0.3, 1pt).
+            RoundedRectangle(cornerRadius: 10).stroke(Color(white: 0.3), lineWidth: 1)
+        )
         .environment(\.colorScheme, .dark)
     }
 
@@ -40,7 +46,7 @@ private struct AgentsPanelSwiftUIView: View {
         Text("\(AgentRowFormat.groupTitle(group)) · \(count)")
             .font(.system(size: 10, weight: .semibold))
             .textCase(.uppercase)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(.primary)
             .padding(.horizontal, 6)
             .frame(height: AgentRowFormat.headerHeight, alignment: .bottom)
             .accessibilityAddTraits(.isHeader)
@@ -56,7 +62,7 @@ private struct AgentRowView: View {
     private var identity: String { AgentRowFormat.displayName(agentID: snapshot.agentID) }
     private var location: String { AgentRowFormat.location(cwd: snapshot.cwd, title: snapshot.title) }
     private var duration: String { AgentRowFormat.duration(since: snapshot.stateSince) }
-    private var reason: String? { AgentRowFormat.reason(for: snapshot) }
+    private var subtitle: String? { AgentRowFormat.subtitle(for: snapshot) }
 
     var body: some View {
         Button(action: action) {
@@ -66,18 +72,20 @@ private struct AgentRowView: View {
                     Text(identity).font(.system(size: 12, weight: .semibold))
                     Text("· \(location)")
                         .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(.primary)
                         .lineLimit(1)
                         .truncationMode(.tail)
                     Spacer(minLength: 4)
                     Text(duration)
                         .font(.system(size: 11).monospacedDigit())
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(.primary)
                 }
-                if let reason {
-                    Text(reason)
+                if let subtitle {
+                    Text(subtitle)
                         .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
                         .padding(.leading, 18)
                 }
             }
@@ -96,28 +104,39 @@ private struct AgentRowView: View {
 
     private var accessibilityLabel: String {
         var parts = [identity, AgentRowFormat.groupTitle(group)]
-        if let reason { parts.append(reason) }
+        if let subtitle { parts.append(subtitle) }
         parts.append(duration == "just now" ? duration : "for \(duration)")
         parts.append(location)
         return parts.joined(separator: ", ")
     }
 }
 
-/// Shape carries the error signal alongside color (ADR 007). Working is a static dim dot,
+/// A status dot whose color encodes state, on a colorblind-safe palette (Okabe-Ito
+/// blue + amber, which stay distinct under the common red-green and blue-yellow
+/// deficiencies, plus a neutral gray for the calm idle state). The dot is static,
 /// never a spinner: the pulse channel belongs to the pill and title-bar indicator.
+/// Shape carries a second, color-independent signal — a nonzero exit renders as a
+/// triangle rather than a circle — so the one state the user must not miss survives
+/// any color vision.
 private struct GlyphView: View {
     let glyph: AgentRowFormat.Glyph
     let group: AgentGroup
+
+    private var color: Color {
+        switch group {
+        case .working: return Color(red: 0, green: 114 / 255, blue: 178 / 255)       // Okabe-Ito blue  #0072B2
+        case .needsYou: return Color(red: 230 / 255, green: 159 / 255, blue: 0)       // Okabe-Ito amber #E69F00
+        case .idle: return Color(white: 0.55)
+        }
+    }
 
     var body: some View {
         Group {
             switch glyph {
             case .triangle:
-                Triangle().fill(Color(nsColor: .systemRed))
-            case .filledCircle:
-                Circle().fill(group == .needsYou ? Color(nsColor: .systemOrange) : Color(white: 0.6))
-            case .hollowCircle:
-                Circle().stroke(Color(white: 0.35), lineWidth: 1.5)
+                Triangle().fill(color)
+            case .filledCircle, .hollowCircle:
+                Circle().fill(color)
             }
         }
         .frame(width: 9, height: 9)

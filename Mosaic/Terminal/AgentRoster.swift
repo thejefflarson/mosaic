@@ -22,11 +22,21 @@ enum AgentRoster {
     /// `needsAttention` and `blocked` both mean the user owes a response, so they win over
     /// any working signal. The blocked / finished / exit-N distinction is a row sublabel,
     /// not a group.
+    ///
+    /// Every row here is a *recognized* agent, so the herdr `agentActivity` — not the
+    /// generic `ActivityState.busy` — decides working vs idle. That matters because a
+    /// running agent's TUI redraws constantly (spinner, token counter), which keeps the
+    /// generic reducer `.busy` even while the agent sits idle at its prompt; letting
+    /// `.busy` mean "working" would pin every agent to the working group forever. `.busy`
+    /// is consulted only as a last resort when the manifest yields no opinion at all.
     static func group(activityState: ActivityState, agentActivity: AgentActivity?) -> AgentGroup {
         if case .needsAttention = activityState { return .needsYou }
-        if agentActivity == .blocked { return .needsYou }
-        if agentActivity == .working || activityState == .busy { return .working }
-        return .idle
+        switch agentActivity {
+        case .blocked: return .needsYou
+        case .working: return .working
+        case .idle: return .idle
+        case .unknown, .none: return activityState == .busy ? .working : .idle
+        }
     }
 
     static func group(for snapshot: AgentSnapshot) -> AgentGroup {
