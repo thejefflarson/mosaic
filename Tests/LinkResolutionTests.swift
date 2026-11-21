@@ -141,7 +141,10 @@ struct LinkResolutionTests {
         // resolve — NSWorkspace.open would RUN these, not view them (ADR-006).
         let (dir, _) = try Self.makeTempFile()
         defer { try? FileManager.default.removeItem(at: dir) }
-        for name in ["run.command", "x.terminal", "do.scpt", "s.applescript"] {
+        for name in ["run.command", "x.terminal", "do.scpt", "s.applescript",
+                     // Installer packages and preference panes execute via
+                     // Installer.app / System Settings — refused like executables.
+                     "evil.pkg", "evil.mpkg", "Evil.prefPane"] {
             try Data("#!/bin/sh\n".utf8).write(to: dir.appendingPathComponent(name))
             #expect(InterceptingTerminalView.resolveOpenableURL(for: name, cwd: dir.path) == nil,
                     "launchable type should be refused: \(name)")
