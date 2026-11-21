@@ -20,7 +20,7 @@ packages:
     revision: 3c45fdcfcf4395c72d2a4ee23c0bce79017b5391
   Sparkle:
     url: https://github.com/sparkle-project/Sparkle
-    revision: 21d8df80440b1ca3b65fa82e40782f1e5a9e6ba2
+    version: 2.10.1
 
 schemes:
   Mosaic:
