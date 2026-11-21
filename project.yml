@@ -17,7 +17,7 @@ settings:
 packages:
   SwiftTerm:
     url: https://github.com/migueldeicaza/SwiftTerm.git
-    revision: 3c45fdcfcf4395c72d2a4ee23c0bce79017b5391
+    revision: 1488fac94f52e3934ffba185b44c2395d4f95d3c
   Sparkle:
     url: https://github.com/sparkle-project/Sparkle
     revision: 21d8df80440b1ca3b65fa82e40782f1e5a9e6ba2
@@ -122,6 +122,9 @@ targets:
     platform: macOS
     sources:
       - path: Tests
+        # Fixture screens are read from the source tree via #filePath, not bundled.
+        excludes:
+          - Fixtures
     settings:
       base:
         SWIFT_VERSION: "6.0"
@@ -131,3 +134,7 @@ targets:
         ENABLE_USER_SCRIPT_SANDBOXING: YES
     dependencies:
       - target: Mosaic
+      # Headless integration tests (HeadlessTerminalIntegrationTests) drive a real
+      # SwiftTerm v2 screen through the engine, so the test target links SwiftTerm
+      # directly rather than only through the host app.
+      - package: SwiftTerm

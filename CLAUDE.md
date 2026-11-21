@@ -11,16 +11,18 @@ macOS desktop app: an infinite 2D spatial canvas where real PTY-backed terminal 
 xcodegen generate
 
 # Build from command line
-xcodebuild build -scheme Mosaic -destination 'platform=macOS' -IDEPackageSupportDisableManifestSandbox=1
+xcodebuild build -scheme Mosaic -destination 'platform=macOS' -IDEPackageSupportDisableManifestSandbox=1 -skipPackagePluginValidation
 
 # Run tests
-xcodebuild test -scheme MosaicTests -destination 'platform=macOS' -IDEPackageSupportDisableManifestSandbox=1
+xcodebuild test -scheme MosaicTests -destination 'platform=macOS' -IDEPackageSupportDisableManifestSandbox=1 -skipPackagePluginValidation
 
 # Open in Xcode, then Cmd+B or Cmd+R
 open Mosaic.xcodeproj
 ```
 
 > **Note:** `-IDEPackageSupportDisableManifestSandbox=1` is required when running xcodebuild from a shell where `sandbox-exec` is blocked at the kernel level (e.g. inside Claude Code / ziplock).
+>
+> **Note:** `-skipPackagePluginValidation` is required because SwiftTerm v2 ships a build-tool plugin (`SwiftTermBuildInfoPlugin`). Without the flag, xcodebuild refuses to run the plugin non-interactively (it waits for a trust prompt that never comes), so every build/test/archive — in CI, in the release script, and from this shell — passes it.
 >
 > **ziplock one-time setup:** If running Claude Code under [ziplock](https://github.com/thejefflarson/ziplock), run this once on the host to suppress Xcode's own Package.swift manifest sandbox:
 > ```bash
@@ -81,7 +83,7 @@ Saves to `~/Library/Application Support/Mosaic/workspace.json` on a 5-second deb
 Always run tests before pushing to avoid breaking CI:
 
 ```bash
-xcodebuild test -scheme MosaicTests -destination 'platform=macOS' -IDEPackageSupportDisableManifestSandbox=1
+xcodebuild test -scheme MosaicTests -destination 'platform=macOS' -IDEPackageSupportDisableManifestSandbox=1 -skipPackagePluginValidation
 ```
 
 ## Release

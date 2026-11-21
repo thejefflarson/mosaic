@@ -93,34 +93,6 @@ final class InterceptingTerminalView: LocalProcessTerminalView {
         return true
     }
 
-    /// SwiftTerm's default linefeed clears selection on every output line, making it
-    /// impossible to select text while the terminal is streaming output. Don't propagate —
-    /// selection is cleared appropriately by keyDown and mouseDown instead.
-    override func linefeed(source: Terminal) {}
-
-    /// SwiftTerm's feedPrepare() clears selection when allowMouseReporting is true,
-    /// which kills any active selection every time terminal data arrives. Temporarily
-    /// disable allowMouseReporting around the feed so the selection persists — the
-    /// same approach iTerm2 and Terminal.app use to keep selection alive during output.
-    override func dataReceived(slice: ArraySlice<UInt8>) {
-        let wasReporting = allowMouseReporting
-        if wasReporting && selectionActive {
-            allowMouseReporting = false
-        }
-        super.dataReceived(slice: slice)
-        if wasReporting && !allowMouseReporting {
-            allowMouseReporting = wasReporting
-        }
-
-        // Feed the attention reducer's output-idle heuristic (ADR 007, decision
-        // 5) and reschedule the silence debounce. Called directly, not hopped —
-        // this runs on every output burst from SwiftTerm's parse/feed path, and
-        // (like the AppKit property reads/writes just above) is already on the
-        // main actor; a `Task` here would just allocate on a hot path for no
-        // isolation benefit.
-        enclosingTerminalWindowView?.recordOutputActivity(at: ProcessInfo.processInfo.systemUptime)
-    }
-
     var onBell: (() -> Void)?
 
     /// Rolling-window counter limiting OSC 8 link-open confirmation dialogs to
@@ -257,7 +229,9 @@ final class InterceptingTerminalView: LocalProcessTerminalView {
     /// off untrusted PTY output, so every one of them must reject an oversized
     /// payload before spending the allocation on `String(bytes:encoding:)`, not
     /// after.
-    static func decodeOSCPayload(_ data: ArraySlice<UInt8>, maxBytes: Int = 8192) -> String? {
+    /// `nonisolated`: a pure parse of untrusted payload bytes, called from the
+    /// `@Sendable` OSC observer closure (off the main actor) before the main-actor hop.
+    nonisolated static func decodeOSCPayload(_ data: ArraySlice<UInt8>, maxBytes: Int = 8192) -> String? {
         guard data.count <= maxBytes else { return nil }
         return String(bytes: data, encoding: .utf8) ?? ""
     }
@@ -267,14 +241,14 @@ final class InterceptingTerminalView: LocalProcessTerminalView {
     /// the distinct ConEmu/Windows-Terminal *progress* protocol, which this
     /// handler deliberately ignores rather than surfaces as a notification
     /// (Docs/ADR/008-osc9-notification-override.md).
-    static func parseOSC9(_ text: String) -> String? {
+    nonisolated static func parseOSC9(_ text: String) -> String? {
         guard !text.hasPrefix("4;") else { return nil }
         return text
     }
 
     /// Parse an OSC 777 payload (minus the "777;" prefix) into (title, body).
     /// Format: `notify;<title>;<body>`. Returns nil for malformed payloads.
-    static func parseOSC777(_ text: String) -> (title: String, body: String)? {
+    nonisolated static func parseOSC777(_ text: String) -> (title: String, body: String)? {
         let parts = text.split(separator: ";", maxSplits: 2,
                                omittingEmptySubsequences: false).map(String.init)
         guard parts.first == "notify", parts.count >= 2 else { return nil }
@@ -289,7 +263,7 @@ final class InterceptingTerminalView: LocalProcessTerminalView {
         case commandFinished(exitCode: Int?)
     }
 
-    static func parseOSC133(_ text: String) -> OSC133Event? {
+    nonisolated static func parseOSC133(_ text: String) -> OSC133Event? {
         guard let first = text.first else { return nil }
         switch first {
         case "A": return .promptStart
@@ -323,7 +297,7 @@ final class InterceptingTerminalView: LocalProcessTerminalView {
         }
     }
 
-    override func bell(source: Terminal) {
+    nonisolated override func bell(source: Terminal) {
         // Deliberately does NOT call super.bell: SwiftTerm's default rings
         // NSSound.beep() for every BEL, which is just noise. The bell instead drives
         // the attention dot / desktop notification (and an optional border flash via
@@ -348,7 +322,12 @@ final class InterceptingTerminalView: LocalProcessTerminalView {
         // to treat the paste as the literal data bracketed mode promises.
         let text = Self.stripBracketedPasteMarkers(raw)
 
-        if !getTerminal().bracketedPasteMode, Self.containsPasteNewline(text) {
+        // v2 removed the mutable `Terminal`; read the one input mode we need from the
+        // copied view snapshot. One read reused below so the mode can't change between
+        // the newline gate and the bracket wrapping.
+        let bracketedPasteMode = terminalStateSnapshot().bracketedPasteMode
+
+        if !bracketedPasteMode, Self.containsPasteNewline(text) {
             let newlineCount = text.unicodeScalars.filter { $0 == "\n" || $0 == "\r" }.count
             let alert = NSAlert()
             alert.messageText = "Paste \(newlineCount) Line\(newlineCount == 1 ? "" : "s")?"
@@ -365,7 +344,7 @@ final class InterceptingTerminalView: LocalProcessTerminalView {
         // saw (TOCTOU). This mirrors SwiftTerm's non-kitty paste path; the one behaviour
         // it drops — kitty key-event encoding for a paste while bracketed mode is off —
         // doesn't apply to literal pasted text.
-        if getTerminal().bracketedPasteMode {
+        if bracketedPasteMode {
             send(data: EscapeSequences.bracketedPasteStart[0...])
             send(txt: text)
             send(data: EscapeSequences.bracketedPasteEnd[0...])
@@ -438,14 +417,15 @@ final class InterceptingTerminalView: LocalProcessTerminalView {
         NSWorkspace.shared.open(url)
     }
 
-    /// SwiftTerm's `TerminalViewDelegate` link hook. For a `LocalProcessTerminalView`
-    /// subclass this is NOT the dispatched protocol witness — the requirement's
-    /// extension-default implementation (`URL(string:)` + `NSWorkspace.open`) wins, so
-    /// SwiftTerm never calls this method. Clicked links are opened by the shared
-    /// mouseUp monitor in `installSharedMonitors` instead. Kept and routed through the
-    /// same opener so a future SwiftTerm change that does dispatch it behaves the same.
-    public func requestOpenLink(source _: TerminalView, link: String, params _: [String: String]) {
-        openResolvedLink(link)
+    /// SwiftTerm v2's link-activation hook. v2 detects the click natively (OSC 8 and
+    /// implicitly-detected paths alike) and dispatches it here; `request.link` is the
+    /// raw, untrusted link text. We override — rather than call `super`, which would
+    /// run SwiftTerm's own `URL(string:)` policy — so every clicked link still goes
+    /// through `openResolvedLink`: the ADR-006 scheme deny-list, the file-path
+    /// resolution that turns a bare path into a real `file:` URL, the launchable-type
+    /// refusal, and the ≤5/min rate cap. See `Docs/ADR/006-link-handling.md`.
+    override func requestOpenLink(source _: TerminalView, request: TerminalLinkRequest) {
+        openResolvedLink(request.link)
     }
 
     /// Schemes that are categorically blocked even with the user-confirmation
@@ -677,10 +657,6 @@ final class TerminalWindowView: NSView {
     // Shared event monitors — installed once, dispatch to the active terminal.
     private static var sharedMonitorsInstalled = false
 
-    // leftMouseDown location, to tell a link-opening click from a drag-select in
-    // the shared mouseUp monitor. One mouse → one shared slot.
-    private static var linkClickDown: NSPoint?
-
     // MARK: - Canvas reference (for zoom-corrected drag)
 
     weak var canvasView: CanvasView?
@@ -747,7 +723,7 @@ final class TerminalWindowView: NSView {
             }
 
             // numericPad fix: only applies when kitty keyboard mode is active.
-            guard !tv.terminal.keyboardEnhancementFlags.isEmpty,
+            guard !tv.keyboardEnhancementFlags.isEmpty,
                   event.modifierFlags.contains(.numericPad),
                   let cgOrig = event.cgEvent,
                   let cgCopy = cgOrig.copy() else { return event }
@@ -755,123 +731,54 @@ final class TerminalWindowView: NSView {
             return NSEvent(cgEvent: cgCopy) ?? event
         }
 
-        // Hover handling has two independent jobs:
+        // Any-event (DECSET 1003) hover suppression — drop button-less hover motion so
+        // it neither phantom-clicks the focused terminal (SwiftTerm's SGR encoder
+        // mis-tags a no-button move as a left-button release, which Claude Code reads
+        // as a click) NOR leaks to an *occluded* terminal. The leak exists because
+        // SwiftTerm delivers `mouseMoved` through an NSTrackingArea, and tracking areas
+        // fire on geometry alone — they ignore z-order — so a 1003 terminal sitting
+        // behind another window (or behind the minimap) still gets hover motion and
+        // reports it to its PTY.
         //
-        //   1. Link cursor — show the pointing-hand over OSC-8 hyperlinks on the
-        //      topmost terminal under the pointer (matches Ghostty/browsers).
-        //
-        //   2. Any-event (DECSET 1003) hover suppression — drop button-less hover
-        //      motion so it neither phantom-clicks the focused terminal (SwiftTerm's
-        //      SGR encoder mis-tags a no-button move as a left-button release, which
-        //      Claude Code reads as a click) NOR leaks to an *occluded* terminal.
-        //      The leak exists because SwiftTerm delivers `mouseMoved` through an
-        //      NSTrackingArea, and tracking areas fire on geometry alone — they
-        //      ignore z-order. So a 1003 terminal sitting behind another window (or
-        //      behind the minimap) still gets hover motion and reports it to its PTY.
-        //
-        // Crucially, only 1003 hover leaks: SwiftTerm's `mouseMoved` calls
-        // `sendMotion` only when `mouseMode.sendMotionEvent()` is true, which is true
-        // *only* for `.anyEvent`. A normal-mode terminal's occluded tracking area
-        // firing is harmless (an invisible I-beam `cursorUpdate` under an opaque
-        // window; nothing reaches its PTY). So we consume `mouseMoved` *only* when a
+        // Only 1003 hover leaks: a normal-mode terminal's occluded tracking area firing
+        // is harmless (nothing reaches its PTY). So we consume `mouseMoved` *only* when a
         // 1003 terminal is under the pointer — leaving normal-mode and empty-canvas
-        // hovers untouched, so AppKit's cursor-rect machinery keeps working and the
-        // cursor never sticks. We can't override `mouseMoved`/`cursorUpdate`
-        // (SwiftTerm declares them public, not open), so consuming is the only lever.
+        // hovers untouched, so AppKit's cursor-rect machinery and SwiftTerm v2's own
+        // OSC-8 link cursor keep working. (v2 highlights links and sets the pointing-hand
+        // natively, so the manual per-cell link lookup this monitor used to do is gone.)
+        //
+        // Consuming starves AppKit's `cursorUpdate`, so wherever we consume we own the
+        // cursor ourselves:
+        //   • topmost is a terminal  → set the I-beam (a 1003 TUI shows no link cursor).
+        //   • topmost is an overlay that owns its cursor (the minimap) → ask it and set it.
+        //   • any other overlay (palette, annotation) → pass through; the rare leak beats
+        //     fighting its own cursor handling.
+        // flagsChanged must always reach the responder chain; only mouseMoved is consumed.
+        // We can't override `mouseMoved`/`cursorUpdate` (SwiftTerm declares them public,
+        // not open), so consuming is the only lever.
         NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved, .flagsChanged]) { event in
-            let tv = terminalUnderPointer(for: event)
-
-            // --- Job 1: link cursor for the topmost terminal ---
-            if let tv {
-                let windowPoint = event.type == .mouseMoved
-                    ? event.locationInWindow
-                    : (event.window?.mouseLocationOutsideOfEventStream ?? event.locationInWindow)
-                let local = tv.convert(windowPoint, from: nil)
-                let tvKey = ObjectIdentifier(tv)
-                if let cell = cellAt(local: local, termView: tv) {
-                    // Re-run the link lookup only when the cell or terminal changed.
-                    if lastLinkHitKey != tvKey || lastLinkHit == nil || lastLinkHit! != cell {
-                        lastLinkHitKey = tvKey
-                        lastLinkHit = cell
-                        let overLink = tv.getTerminal().link(
-                            at: .screen(Position(col: cell.col, row: cell.row)),
-                            mode: .explicitAndImplicit) != nil
-                        if overLink != sharedLinkCursorActive {
-                            sharedLinkCursorActive = overLink
-                            DispatchQueue.main.async {
-                                (overLink ? NSCursor.pointingHand : NSCursor.iBeam).set()
-                            }
-                        }
-                    }
-                } else {
-                    // Over the terminal view but off the text grid.
-                    if sharedLinkCursorActive {
-                        sharedLinkCursorActive = false
-                        DispatchQueue.main.async { NSCursor.iBeam.set() }
-                    }
-                    lastLinkHitKey = nil
-                    lastLinkHit = nil
-                }
-            } else {
-                // Not over a terminal — whatever view is under the pointer owns its
-                // own cursor (minimap, palette, annotation, empty canvas).
-                sharedLinkCursorActive = false
-                lastLinkHitKey = nil
-                lastLinkHit = nil
+            guard event.type == .mouseMoved, anyEventTerminalUnderPointer(for: event) else { return event }
+            if terminalUnderPointer(for: event) != nil {
+                DispatchQueue.main.async { NSCursor.iBeam.set() }
+                return nil
             }
-
-            // --- Job 2: suppress 1003 hover (only when it would actually leak) ---
-            // flagsChanged must always reach the responder chain; only mouseMoved is
-            // ever consumed. Consuming starves AppKit's `cursorUpdate`, so wherever
-            // we consume we must own the cursor ourselves:
-            //   • topmost is a terminal  → cursor already set in Job 1.
-            //   • topmost is an overlay that owns its cursor (the minimap) → ask it
-            //     for the cursor and set it directly, so the overlay stays fully in
-            //     control of the pointer and nothing leaks to the terminal beneath.
-            //   • any other overlay (tool palette, annotation) → pass through; the
-            //     rare leak is preferable to fighting its own cursor handling.
-            if event.type == .mouseMoved, anyEventTerminalUnderPointer(for: event) {
-                if tv != nil { return nil }
-                if let overlay = hoverCursorView(for: event) {
-                    let local = overlay.convert(event.locationInWindow, from: nil)
-                    if let cursor = overlay.hoverCursor(at: local) {
-                        DispatchQueue.main.async { cursor.set() }
-                    }
-                    return nil
+            if let overlay = hoverCursorView(for: event) {
+                let local = overlay.convert(event.locationInWindow, from: nil)
+                if let cursor = overlay.hoverCursor(at: local) {
+                    DispatchQueue.main.async { cursor.set() }
                 }
+                return nil
             }
             return event
         }
 
-        // Open a clicked link/path. SwiftTerm routes link clicks through its
-        // `requestOpenLink` delegate hook, but for a LocalProcessTerminalView subclass
-        // the dispatched witness is the protocol's extension default (`URL(string:)` +
-        // NSWorkspace.open) — which turns a plain file path into a scheme-less URL that
-        // Launch Services rejects with OSStatus -50. `mouseUp` is public, not open, so
-        // we intercept the click here, resolve + open it ourselves (file paths → a real
-        // file URL; ADR-006 scheme deny-list applies), and consume the event so
-        // SwiftTerm's broken default never runs. A click is told from a drag-select by
-        // how far the cursor travelled since mouseDown.
-        NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .leftMouseUp]) { event in
-            guard let tv = terminalUnderPointer(for: event) else { linkClickDown = nil; return event }
-            if event.type == .leftMouseDown {
-                linkClickDown = event.locationInWindow
-                return event                       // let SwiftTerm anchor a selection
-            }
-            let down = linkClickDown
-            linkClickDown = nil
-            if let down, hypot(event.locationInWindow.x - down.x, event.locationInWindow.y - down.y) > 3 {
-                return event                       // dragged → text selection, not a click
-            }
-            let local = tv.convert(event.locationInWindow, from: nil)
-            guard let cell = cellAt(local: local, termView: tv),
-                  let link = tv.getTerminal().link(
-                      at: .screen(Position(col: cell.col, row: cell.row)),
-                      mode: .explicitAndImplicit)
-            else { return event }
-            tv.openResolvedLink(link)
-            return nil                             // consume so SwiftTerm's -50 default never runs
-        }
+        // Clicked links are opened by SwiftTerm v2 natively: it detects the click (OSC 8
+        // and implicitly-detected paths alike) and dispatches it to our
+        // `requestOpenLink(source:request:)` override, which runs the ADR-006 resolution
+        // + rate cap. v1 needed a manual `mouseUp` monitor here because the dispatched
+        // witness was a protocol-extension default that opened bare paths with a
+        // scheme-less `URL(string:)` (OSStatus -50); v2 removed that failure, and the
+        // per-cell `link(at:)` query the monitor relied on is no longer public.
 
         // TUI mouse wheel: when the app under the pointer has enabled mouse
         // tracking (vim, htop, tmux, less, …), translate the wheel into a mouse
@@ -883,19 +790,16 @@ final class TerminalWindowView: NSView {
         NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { event in
             guard event.scrollingDeltaY != 0,
                   let tv = terminalUnderPointer(for: event) else { return event }
-            let t = tv.getTerminal()
-            guard tv.allowMouseReporting, t.mouseMode != .off else { return event }
+            guard tv.allowMouseReporting, tv.currentMouseMode != .off else { return event }
             let local = tv.convert(event.locationInWindow, from: nil)
             guard let cell = cellAt(local: local, termView: tv) else { return event }
             let f = event.modifierFlags
             // Wheel up = button 4, wheel down = button 5. Match SwiftTerm's
             // local-scroll sense (positive deltaY → toward older content → up).
+            // v2 exposes `sendMouseEvent`, which does the v1 `encodeButton` +
+            // `sendEvent` in one public call off the view (the mutable Terminal and
+            // its encoder are no longer reachable).
             let up = event.scrollingDeltaY > 0
-            let cb = t.encodeButton(button: up ? 4 : 5,
-                                    release: false,
-                                    shift: f.contains(.shift),
-                                    meta: f.contains(.option),
-                                    control: f.contains(.control))
             // Emit one line report per `wheelPointsPerLine` points of accumulated
             // delta. Accumulating across events (rather than min(delta/3, 8) per
             // event) ties scroll distance to how far the finger actually moved, so
@@ -909,7 +813,11 @@ final class TerminalWindowView: NSView {
             wheelAccumulator += event.scrollingDeltaY
             var emitted = 0
             while abs(wheelAccumulator) >= wheelPointsPerLine && emitted < 4 {
-                t.sendEvent(buttonFlags: cb, x: cell.col, y: cell.row)
+                tv.sendMouseEvent(button: up ? 4 : 5, release: false,
+                                  shift: f.contains(.shift),
+                                  meta: f.contains(.option),
+                                  control: f.contains(.control),
+                                  col: cell.col, row: cell.row)
                 wheelAccumulator -= up ? wheelPointsPerLine : -wheelPointsPerLine
                 emitted += 1
             }
@@ -929,7 +837,7 @@ final class TerminalWindowView: NSView {
             for sub in view.subviews {
                 if let tv = sub as? InterceptingTerminalView,
                    !tv.isHiddenOrHasHiddenAncestor,
-                   tv.getTerminal().mouseMode == .anyEvent,
+                   tv.currentMouseMode == .anyEvent,
                    tv.convert(tv.bounds, to: nil).contains(point) {
                     return true
                 }
@@ -970,8 +878,8 @@ final class TerminalWindowView: NSView {
     private static func cellAt(local: NSPoint, termView: InterceptingTerminalView) -> (col: Int, row: Int)? {
         let bounds = termView.bounds
         guard bounds.contains(local) else { return nil }
-        let terminal = termView.getTerminal()
-        let cols = terminal.cols, rows = terminal.rows
+        let dimensions = termView.terminalDimensions
+        let cols = dimensions.cols, rows = dimensions.rows
         guard cols > 0, rows > 0 else { return nil }
         let cellW = bounds.width / CGFloat(cols)
         let cellH = bounds.height / CGFloat(rows)
@@ -981,12 +889,6 @@ final class TerminalWindowView: NSView {
         let row = min(max(0, Int((bounds.height - local.y) / cellH)), rows - 1)
         return (col, row)
     }
-
-    private static var sharedLinkCursorActive = false
-    /// Per-terminal so a cached cell index from a previously-focused terminal
-    /// (with different grid dims) can't early-return for an unrelated cell.
-    private static var lastLinkHitKey: ObjectIdentifier?
-    private static var lastLinkHit: (col: Int, row: Int)?
 
     // MARK: - Focus state
 
@@ -1115,8 +1017,9 @@ final class TerminalWindowView: NSView {
         return "Waiting for you"
     }
 
-    /// Called from `InterceptingTerminalView.dataReceived(slice:)` on every
-    /// output burst.
+    /// Called from the `setProcessOutputHandler` installed in `setupTerminal` after
+    /// every parsed output batch (ADR 007, decision 5). The handler fires off the main
+    /// actor on SwiftTerm's parse thread and hops here via `Task { @MainActor }`.
     func recordOutputActivity(at time: TimeInterval) {
         reduceActivity(.outputActivity(at: time))
         rescheduleSilenceDebounce()
@@ -1138,12 +1041,12 @@ final class TerminalWindowView: NSView {
     // MARK: - Activity: silence debounce
     //
     // ADR 007, decision 5: the busy→quiet and idle→attention transitions depend
-    // on the *absence* of output, so this mirrors the `redrawWatchdog` idiom
-    // below — a single cancellable `DispatchSourceTimer`, rescheduled on every
-    // output burst rather than recreated, so a quiet terminal never allocates a
-    // new timer and a busy one never leaves a stale deadline pending. A bare
-    // `asyncAfter` is deliberately not used: it returns no handle, so an earlier
-    // burst's callback can't be invalidated when a later burst reschedules.
+    // on the *absence* of output, so this uses a single cancellable
+    // `DispatchSourceTimer`, rescheduled on every output burst rather than recreated,
+    // so a quiet terminal never allocates a new timer and a busy one never leaves a
+    // stale deadline pending. A bare `asyncAfter` is deliberately not used: it returns
+    // no handle, so an earlier burst's callback can't be invalidated when a later
+    // burst reschedules.
     private var silenceDebounce: DispatchSourceTimer?
 
     private func startSilenceDebounce() {
@@ -1195,16 +1098,12 @@ final class TerminalWindowView: NSView {
     /// regions (e.g. `prompt_box_body`, `after_last_horizontal_rule`) slice internally
     /// and need more of the screen than a fixed tail to find their anchors.
     private func visibleScreenText() -> String {
-        guard let terminal = termView.terminal else { return "" }
-        var lines: [String] = []
-        lines.reserveCapacity(terminal.rows)
-        for row in 0..<terminal.rows {
-            guard let line = terminal.getLine(row: row) else { continue }
-            lines.append(line.translateToString(
-                trimRight: true,
-                characterProvider: { let c = $0.getCharacter(); return c == "\0" ? " " : c }))
-        }
-        return lines.joined(separator: "\n")
+        // v2 removed the mutable `Terminal`; the copied view snapshot gives every
+        // visible row's text with the same display conversion the old `getLine` walk
+        // did by hand (wide-glyph continuation cells skipped, unwritten cells read as
+        // spaces, no NUL). The agent-detection logic (ADR-009) is unchanged — only the
+        // screen-scrape source moved to the v2 snapshot API.
+        termView.terminalStateSnapshot().visibleRows.map(\.text).joined(separator: "\n")
     }
 
     /// Classify the visible screen and drive the reducer. Returns true when this was an
@@ -1350,6 +1249,18 @@ final class TerminalWindowView: NSView {
         }
         termView.nativeForegroundColor = theme.terminalForeground
         termView.nativeBackgroundColor = theme.terminalBackground
+
+        // v2 parses process output on its I/O thread and no longer calls a
+        // `dataReceived` override, so the attention reducer's output-idle heuristic
+        // (ADR 007, decision 5) is fed from this batch-completion handler instead. It
+        // runs @Sendable off the main actor on the parse thread; capture the timestamp
+        // there and hop to the main actor to touch reducer state.
+        termView.setProcessOutputHandler { [weak self] in
+            let now = ProcessInfo.processInfo.systemUptime
+            Task { @MainActor [weak self] in
+                self?.recordOutputActivity(at: now)
+            }
+        }
         addSubview(termView)
 
         let p: CGFloat = 8
@@ -1366,7 +1277,6 @@ final class TerminalWindowView: NSView {
 
         registerOSCHandlers()
         Self.installSharedMonitors()
-        startRedrawWatchdog()
         startSilenceDebounce()
 
         startProcess()
@@ -1374,60 +1284,63 @@ final class TerminalWindowView: NSView {
 
     // MARK: - OSC handlers
 
+    /// Keeps the `observeOscEvents` registration alive. Dropping it cancels the
+    /// observation (see `TerminalOscObservation`), so it lives as long as the view.
+    private var oscObservation: TerminalOscObservation?
+
     private func registerOSCHandlers() {
-        let terminal = termView.getTerminal()
-
-        // OSC 9 — the iTerm2/Growl desktop-notification convention (distinct from
-        // SwiftTerm's native OSC 9;4 ConEmu/Windows-Terminal *progress* protocol).
-        // Registering a user handler here replaces SwiftTerm's entire built-in
-        // `case 9` branch, including the progress path — deliberate, and safe:
-        // Mosaic never implements `progressReport`, so that native path is
-        // already a no-op today. See Docs/ADR/008-osc9-notification-override.md.
-        // `9;4;…` payloads are ignored (parseOSC9 returns nil) to preserve that
-        // observable no-op; everything else is a notification message, routed
-        // through the exact OSC 777 hardening below (cap, sanitizer chain, rate
-        // limit) via `emitNotification`.
-        terminal.parser.oscHandlers[9] = { [weak self] data in
-            guard let text = InterceptingTerminalView.decodeOSCPayload(data) else { return }
-            guard let message = InterceptingTerminalView.parseOSC9(text) else { return }
-            Task { @MainActor [weak self] in
-                self?.emitNotification(title: "", body: message)
-            }
-        }
-
-        // OSC 777 — notify;title;body
-        // SwiftTerm parses this but the delegate is a protocol extension no-op.
-        // Override via parser handler. Cap payload size and sanitize control bytes
-        // (terminal output is untrusted; an unbounded OSC payload would allocate
-        // a huge String on MainActor and forward it to UNUserNotificationCenter).
+        // v2 made the mutable `Terminal` (and `parser.oscHandlers`) internal, so the
+        // v1 handler-replacement is gone. v2's public `observeOscEvents(codes:_:)`
+        // delivers a copy of each matching OSC sequence while leaving the view's own
+        // handling in place. The ADR-008 behaviour is unchanged where it matters:
         //
-        // Architectural note: SwiftTerm buffers the entire OSC payload before
-        // calling this handler, so a crafted PTY stream can still cause a large
-        // heap allocation before our cap takes effect. Fixing this requires a
-        // SwiftTerm-level change to truncate OSC sequences during parsing.
-        terminal.parser.oscHandlers[777] = { [weak self] data in
-            guard let text = InterceptingTerminalView.decodeOSCPayload(data) else { return }
-            guard let parsed = InterceptingTerminalView.parseOSC777(text) else { return }
-            Task { @MainActor [weak self] in
-                self?.emitNotification(title: parsed.title, body: parsed.body)
-            }
-        }
-
-        // OSC 133 D — command finished. Only wire this marker; busy indicators
-        // on B/C are a bad idea for TUIs (claude/vim) which never emit D until exit,
-        // leaving the whole app pulsing.
+        //   • OSC 9  — the iTerm2/Growl desktop-notification convention. `9;4;…`
+        //     progress payloads are still ignored (parseOSC9 returns nil); every other
+        //     payload is a notification routed through `emitNotification`.
+        //   • OSC 777 — notify;title;body → the same hardened notification path.
+        //   • OSC 133 D — command finished → the attention reducer.
         //
-        // Architectural note: SwiftTerm buffers the entire OSC payload before
-        // calling this handler, so a crafted PTY stream can still cause a large
-        // heap allocation before our 8192-byte cap takes effect. Fixing this
-        // requires a SwiftTerm-level change to truncate OSC sequences during
-        // parsing (same limitation as the OSC 777 handler above).
-        terminal.parser.oscHandlers[133] = { [weak self] data in
-            guard let text = InterceptingTerminalView.decodeOSCPayload(data) else { return }
-            guard case .commandFinished(let exit) = InterceptingTerminalView.parseOSC133(text) else { return }
-            Task { @MainActor [weak self] in
-                // Also drives the title-bar dot — see reduceActivity.
-                self?.reduceActivity(.commandFinished(exitCode: exit, at: ProcessInfo.processInfo.systemUptime))
+        // The one difference from the v1 override: SwiftTerm v2 keeps its own OSC
+        // handling (semantic-prompt tracking for 133, any native 9;4 progress UI)
+        // *in addition* to our observer, rather than our handler replacing it. Mosaic
+        // surfaces nothing of its own for 9;4, so ADR-008's observable no-op for that
+        // payload is preserved; the native semantic-prompt handling we previously
+        // suppressed is now simply allowed, which does not change Mosaic's behaviour.
+        //
+        // `event.payload` is the bytes after the "<code>;" separator — exactly what the
+        // v1 `oscHandlers[code]` closures received, so decode/parse is unchanged.
+        // Events arrive @Sendable on SwiftTerm's private serial queue; each hops to the
+        // main actor before touching reducer/notification state. The returned token
+        // must be retained for the observation to stay live (see `oscObservation`).
+        //
+        // Architectural note (carried from v1): SwiftTerm buffers the entire OSC
+        // payload before publishing it, so a crafted PTY stream can still force a large
+        // heap allocation before `decodeOSCPayload`'s 8192-byte cap takes effect.
+        // Bounding that would require truncating OSC sequences during parsing upstream.
+        oscObservation = termView.observeOscEvents(codes: [9, 777, 133]) { [weak self] event in
+            let payload = event.payload[...]
+            switch event.code {
+            case 9:
+                guard let text = InterceptingTerminalView.decodeOSCPayload(payload),
+                      let message = InterceptingTerminalView.parseOSC9(text) else { return }
+                Task { @MainActor [weak self] in
+                    self?.emitNotification(title: "", body: message)
+                }
+            case 777:
+                guard let text = InterceptingTerminalView.decodeOSCPayload(payload),
+                      let parsed = InterceptingTerminalView.parseOSC777(text) else { return }
+                Task { @MainActor [weak self] in
+                    self?.emitNotification(title: parsed.title, body: parsed.body)
+                }
+            case 133:
+                guard let text = InterceptingTerminalView.decodeOSCPayload(payload),
+                      case .commandFinished(let exit) = InterceptingTerminalView.parseOSC133(text) else { return }
+                Task { @MainActor [weak self] in
+                    // Also drives the title-bar dot — see reduceActivity.
+                    self?.reduceActivity(.commandFinished(exitCode: exit, at: ProcessInfo.processInfo.systemUptime))
+                }
+            default:
+                break
             }
         }
     }
@@ -1476,36 +1389,46 @@ final class TerminalWindowView: NSView {
     static let maxScrollbackTotalChars = 256 * 1024
 
     /// Extract up to `maxLines` of scrollback + visible screen content as plain text.
+    ///
+    /// v2 removed `getScrollInvariantLine`; the whole active buffer (scrollback +
+    /// screen) comes from the view's public `getBufferAsData`, newline-separated. The
+    /// capping/trimming is factored into `scrollbackCapture` so it can be unit-tested
+    /// without a PTY.
     func extractScrollbackText(maxLines: Int = 300) -> String {
-        guard let t = termView.terminal else { return "" }
-        let cap = Self.maxScrollbackLineChars
-        let render: (Int) -> String? = { row in
-            guard let line = t.getScrollInvariantLine(row: row) else { return nil }
-            let s = line.translateToString(trimRight: true,
-                                           characterProvider: { let c = $0.getCharacter(); return c == "\0" ? " " : c })
-            return s.count > cap ? String(s.prefix(cap)) : s
+        let rows = Self.bufferRows(from: termView.getBufferAsData())
+        return Self.scrollbackCapture(
+            rows: rows,
+            lineCharCap: Self.maxScrollbackLineChars,
+            keepLines: maxLines + termView.terminalDimensions.rows,
+            totalCharCap: Self.maxScrollbackTotalChars)
+    }
+
+    /// Split a UTF-8 buffer dump (the newline-separated rows `getBufferAsData`
+    /// produces) into right-trimmed row strings.
+    ///
+    /// Splitting on the raw `0x0A` byte, not on a Swift `Character`, matters: a row
+    /// that ends in `\r` and the `\n` row separator form one `"\r\n"` grapheme, so a
+    /// `Character`-level split would miss that boundary and join two rows (the CRLF
+    /// gotcha in `feedback_swift_crlf_split.md`). Right-trimming spaces reproduces the
+    /// old per-row `translateToString(trimRight:)` so blank-line detection still works.
+    static func bufferRows(from data: Data) -> [String] {
+        data.split(separator: 0x0A, omittingEmptySubsequences: false).map { chunk in
+            var scalars = String(decoding: chunk, as: UTF8.self).unicodeScalars
+            while let last = scalars.last, last == " " || last == "\t" {
+                scalars.removeLast()
+            }
+            return String(scalars)
         }
+    }
 
-        var lines: [String] = []
-
-        // Walk backwards through scrollback (negative row indices into getScrollInvariantLine)
-        var row = -1
-        while lines.count < maxLines, let s = render(row) {
-            lines.insert(s, at: 0)
-            row -= 1
-        }
-
-        // Visible screen lines
-        for r in 0..<t.rows {
-            if let s = render(r) { lines.append(s) }
-        }
-
-        // Drop trailing blank lines
+    /// Keep the last `keepLines` rows, cap each to `lineCharCap`, drop trailing blank
+    /// rows, join with CRLF, and cap the whole thing to `totalCharCap` from the end.
+    static func scrollbackCapture(rows: [String], lineCharCap: Int, keepLines: Int, totalCharCap: Int) -> String {
+        var lines = rows.map { $0.count > lineCharCap ? String($0.prefix(lineCharCap)) : $0 }
+        if lines.count > keepLines { lines.removeFirst(lines.count - keepLines) }
         while lines.last?.isEmpty == true { lines.removeLast() }
         let joined = lines.joined(separator: "\r\n")
-        return joined.count > Self.maxScrollbackTotalChars
-            ? String(joined.suffix(Self.maxScrollbackTotalChars))
-            : joined
+        return joined.count > totalCharCap ? String(joined.suffix(totalCharCap)) : joined
     }
 
     // MARK: - Find
@@ -1625,63 +1548,48 @@ final class TerminalWindowView: NSView {
     }
 
     /// Count case-insensitive substring occurrences across the entire scrollback +
-    /// visible buffer. SwiftTerm's full-buffer match count is internal, so we walk
-    /// rows via the public getScrollInvariantLine and tally matches per line.
+    /// visible buffer. SwiftTerm's full-buffer match count is internal, so we read the
+    /// whole active buffer via the public `getBufferAsData` and tally per line. The
+    /// counting (and its DoS caps) is factored into `matchCount` for unit testing.
     private func recomputeMatchTotal(term: String) {
-        guard !term.isEmpty, let terminal = termView.terminal else {
+        guard !term.isEmpty else {
             matchTotal = 0
             return
         }
-        // getScrollInvariantLine's valid row range is contiguous starting at
-        // some non-negative `linesTop`. Find it with a doubling probe + binary
-        // search, then walk forward until the function returns nil again.
-        let firstRow: Int
-        if terminal.getScrollInvariantLine(row: 0) != nil {
-            firstRow = 0
-        } else {
-            var hi = 1
-            while terminal.getScrollInvariantLine(row: hi) == nil {
-                if hi > 1 << 24 { matchTotal = 0; return }
-                hi <<= 1
-            }
-            var lo = hi >> 1
-            while lo < hi {
-                let mid = (lo + hi) >> 1
-                if terminal.getScrollInvariantLine(row: mid) == nil {
-                    lo = mid + 1
-                } else {
-                    hi = mid
-                }
-            }
-            firstRow = lo
-        }
+        let rows = Self.bufferRows(from: termView.getBufferAsData())
+        matchTotal = Self.matchCount(
+            rows: rows,
+            term: term,
+            perRowCap: Self.maxScrollbackLineChars,
+            // Cap at 10 000 rows / 1 MB of scanned text so a PTY that fills scrollback
+            // cannot block the main actor for hundreds of ms per find-bar keystroke.
+            maxRows: 10_000,
+            totalByteCap: 1 * 1024 * 1024)
+    }
 
+    /// Count case-insensitive, overlapping-free occurrences of `term` across `rows`,
+    /// stopping after `maxRows` rows or `totalByteCap` bytes of (capped, lowercased)
+    /// text, whichever comes first.
+    static func matchCount(rows: [String], term: String, perRowCap: Int, maxRows: Int, totalByteCap: Int) -> Int {
+        guard !term.isEmpty else { return 0 }
+        let lower = term.lowercased()
         var count = 0
         var bytesScanned = 0
-        var row = firstRow
-        let lower = term.lowercased()
-        let perRowCap = Self.maxScrollbackLineChars
-        // Cap at 10 000 rows / 1 MB of text so a PTY that fills scrollback cannot
-        // block the MainActor for hundreds of milliseconds per find-bar keystroke.
-        let totalCap = 1 * 1024 * 1024
-        while let line = terminal.getScrollInvariantLine(row: row) {
-            var s = line.translateToString(
-                trimRight: true,
-                characterProvider: { let c = $0.getCharacter(); return c == "\0" ? " " : c }
-            ).lowercased()
+        var scanned = 0
+        for row in rows {
+            if scanned >= maxRows || bytesScanned > totalByteCap { break }
+            scanned += 1
+            var s = row.lowercased()
             if s.count > perRowCap { s = String(s.prefix(perRowCap)) }
             bytesScanned += s.utf8.count
-            if !s.isEmpty {
-                var idx = s.startIndex
-                while let r = s.range(of: lower, range: idx..<s.endIndex) {
-                    count += 1
-                    idx = r.upperBound
-                }
+            if s.isEmpty { continue }
+            var idx = s.startIndex
+            while let r = s.range(of: lower, range: idx..<s.endIndex) {
+                count += 1
+                idx = r.upperBound
             }
-            row += 1
-            if row - firstRow > 10_000 || bytesScanned > totalCap { break }
         }
-        matchTotal = count
+        return count
     }
 
     /// Clear scrollback and screen (Cmd+K behaviour). Feeds ESC sequences directly
@@ -1808,7 +1716,7 @@ final class TerminalWindowView: NSView {
                 // from this point it must read the live frame, not the startup snapshot.
                 termView!.cachedWindowSize = nil
                 termView!.changeScrollback(scrollbackLines)
-                termView!.getTerminal().setCursorStyle(cursorStyle)
+                termView!.setCursorStyle(cursorStyle)
             }
         }
 
@@ -1913,7 +1821,7 @@ final class TerminalWindowView: NSView {
         termView.allowMouseReporting    = settings.allowMouseReporting
         termView.useBrightColors        = settings.useBrightColors
         termView.changeScrollback(settings.scrollbackLines)
-        termView.getTerminal().setCursorStyle(settings.swiftTermCursorStyle)
+        termView.setCursorStyle(settings.swiftTermCursorStyle)
     }
 
     func applyTheme(_ theme: Theme) {
@@ -2034,49 +1942,18 @@ final class TerminalWindowView: NSView {
     //      (`pendingDisplay == true`), so rows fed afterwards never repaint until
     //      an unrelated event forces a draw — the classic "nothing renders until
     //      I scroll" freeze.
-    //   2. Partial-region invalidation leaves stale rows on screen ("garbled"
-    //      output) when the buffer changed more than the invalidated band, which
-    //      happens constantly in alt-screen TUIs like claude that rewrite the
-    //      whole viewport.
-    //
-    // This watchdog is a safety net for both. Whenever the terminal reports
-    // unflushed buffer changes, we clear the range we're about to satisfy (so a
-    // sustained stall doesn't repaint the same dirty band every tick — a later
-    // feed re-arms it) and force a *full* invalidation. `draw()` always paints
-    // every visible row from the live buffer, so forcing full redraws can never
-    // lose or duplicate content; it only defeats the stale-row garble and breaks
-    // the stuck throttle. In the healthy case SwiftTerm has already flushed
-    // within 16ms, so `getUpdateRange()` is nil and this is a two-int read.
-    private var redrawWatchdog: DispatchSourceTimer?
-
-    private func startRedrawWatchdog() {
-        let t = DispatchSource.makeTimerSource(queue: .main)
-        // ~30fps: a stalled frame recovers before it's perceptible. The generous
-        // leeway lets the kernel coalesce wakeups so an idle terminal (gate below
-        // is nil) costs almost nothing.
-        t.schedule(deadline: .now() + 0.033, repeating: 0.033, leeway: .milliseconds(16))
-        t.setEventHandler { [weak self] in
-            guard let self, !self.termView.isHidden else { return }
-            let terminal = self.termView.getTerminal()
-            guard terminal.getUpdateRange() != nil else { return }
-            terminal.clearUpdateRange()
-            self.termView.needsDisplay = true
-        }
-        t.resume()
-        redrawWatchdog = t
-    }
-
-    /// Force a full repaint from the live buffer. Used when a terminal is
-    /// revealed after viewport culling hid it: rows fed while `isHidden` cleared
-    /// SwiftTerm's update range without ever painting, so the on-screen content
-    /// can be stale even though AppKit considers the view clean.
-    func forceFullRedraw() {
-        termView.getTerminal().clearUpdateRange()
-        termView.needsDisplay = true
-    }
+    // The v1 redraw watchdog (a 30fps timer that cleared `Terminal.getUpdateRange()`
+    // and forced a full `needsDisplay` on every unflushed buffer change) is gone with
+    // v2. It worked around v1's CoreGraphics `pendingDisplay` throttle and
+    // partial-region invalidation; v2 renders through a GPU snapshot pipeline
+    // (`FrameDriver`/`RenderLoop`) that owns its own invalidation and display-link
+    // scheduling and suspends/resumes on view visibility, so the manual watchdog — and
+    // its now-internal `getUpdateRange`/`clearUpdateRange` primitives — have no v2
+    // equivalent and no remaining purpose. Repaint after un-culling now relies on the
+    // frame driver resuming when the view is unhidden; see the PR's runtime-test
+    // checklist item "repaint after un-culling a hidden terminal".
 
     deinit {
-        redrawWatchdog?.cancel()
         silenceDebounce?.cancel()
         appActivationObservers.forEach { NotificationCenter.default.removeObserver($0) }
     }
@@ -2111,11 +1988,9 @@ final class TerminalWindowView: NSView {
         // `leaks` won't flag it — the memory is reachable, not lost.
         termView.terminate()
 
-        // Stop both per-terminal timers here, deterministically, rather than
-        // relying on deinit: the retain chain described above means dealloc
-        // can be arbitrarily delayed, and a live redraw watchdog or silence
-        // debounce on a closed terminal wastes wakeups for no observer.
-        redrawWatchdog?.cancel()
+        // Stop the silence-debounce timer here, deterministically, rather than relying
+        // on deinit: the retain chain described above means dealloc can be arbitrarily
+        // delayed, and a live timer on a closed terminal wastes wakeups for no observer.
         silenceDebounce?.cancel()
     }
 }

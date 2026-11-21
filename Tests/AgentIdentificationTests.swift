@@ -174,6 +174,18 @@ struct AgentIdentificationTests {
         #expect(result == "claude")
     }
 
+    @Test func identifyInSubtreeResolvesClaudeThroughFishZiplockChain() throws {
+        // The documented wrapper chain from this project's own setup: a fish login
+        // shell execs ziplock, which execs claude. `identifyInSubtree` must walk the
+        // injected childPids/processName map and return "claude" — no real processes.
+        let manifests = ["claude": try manifest(id: "claude")]
+        let env = environment(leader: 10,
+                              names: [10: "fish", 20: "ziplock", 30: "claude"],
+                              children: [10: [20], 20: [30]])
+        #expect(ForegroundAgentIdentifier.identifyInSubtree(
+            rootPid: 10, manifests: manifests, environment: env) == "claude")
+    }
+
     @Test func directLeaderAgentWinsOverADescendantAgent() throws {
         // Leader is itself an agent; it must win over anything it spawns.
         let manifests = ["claude": try manifest(id: "claude"),
