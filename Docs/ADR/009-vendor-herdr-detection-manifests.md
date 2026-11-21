@@ -93,3 +93,23 @@ all attention UI are unchanged.
   desktop app doesn't need. Deferrable atop the vendored engine if ever justified.
 - **Keep hand-porting** the constants — the status quo; two fixes in one release already showed it
   doesn't scale to agent drift or agent count.
+
+## Update (2026-11): wrapper peeling via subtree search
+
+Decision 4 originally identified an agent from the PTY foreground group leader's `argv0`
+basename alone, and recorded a gap: an agent run under a wrapper (a sandbox such as
+`ziplock`, or `sh -c`/`npx`/`uvx`/`mise`) is invisible, because the foreground process is
+the *wrapper* and the agent is its child. In practice this was the common case — a user
+running `ziplock … claude` saw no agent at all.
+
+`ForegroundAgentIdentifier.identify` now treats the foreground leader as the *root* of a
+bounded breadth-first walk of its process subtree (`proc_listpids(PROC_PPID_ONLY)`), and
+returns the first process whose `argv0` matches a manifest. The leader is still tested
+before any descendant, so a directly-launched agent wins over anything it spawns; the walk
+is capped (64 processes, visited-set) so a deep or cyclic tree cannot stall the ~1 Hz drive
+path. This peels process-spawning wrappers without a manifest entry per wrapper.
+
+The remaining gap is narrower: an *in-process* interpreter agent whose own `argv0` is the
+interpreter and which spawns no distinct agent child (`node script.js`). No subtree entry
+names it, so it still falls to the generic tier — closing that needs tuios's package-path
+discrimination, which stays deferred.

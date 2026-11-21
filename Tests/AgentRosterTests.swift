@@ -10,9 +10,12 @@ struct AgentRosterTests {
 
     private func expected(_ state: ActivityState, _ activity: AgentActivity?) -> AgentGroup {
         if case .needsAttention = state { return .needsYou }
-        if activity == .blocked { return .needsYou }
-        if activity == .working || state == .busy { return .working }
-        return .idle
+        switch activity {
+        case .blocked: return .needsYou
+        case .working: return .working
+        case .idle: return .idle
+        case .unknown, .none: return state == .busy ? .working : .idle
+        }
     }
 
     @Test func groupMatrix() {
@@ -27,7 +30,12 @@ struct AgentRosterTests {
     @Test func precedenceCases() {
         #expect(AgentRoster.group(activityState: .needsAttention(exitCode: nil), agentActivity: .working) == .needsYou)
         #expect(AgentRoster.group(activityState: .busy, agentActivity: .blocked) == .needsYou)
-        #expect(AgentRoster.group(activityState: .busy, agentActivity: .idle) == .working)
+        // A known idle agent stays idle even while the generic reducer is .busy (a
+        // running TUI redraws constantly) — the regression behind "stays red".
+        #expect(AgentRoster.group(activityState: .busy, agentActivity: .idle) == .idle)
+        // .busy is consulted only when the manifest has no opinion.
+        #expect(AgentRoster.group(activityState: .busy, agentActivity: .unknown) == .working)
+        #expect(AgentRoster.group(activityState: .quiet, agentActivity: .unknown) == .idle)
         #expect(AgentRoster.group(activityState: .quiet, agentActivity: .working) == .working)
         #expect(AgentRoster.group(activityState: .quiet, agentActivity: nil) == .idle)
     }

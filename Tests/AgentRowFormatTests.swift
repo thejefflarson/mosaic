@@ -52,8 +52,24 @@ struct AgentRowFormatTests {
         #expect(AgentRowFormat.glyph(for: snap()) == .hollowCircle)
     }
 
+    @Test func subtitleCombinesReasonAndSessionTitle() {
+        // Non-needs-you: just the session title.
+        #expect(AgentRowFormat.subtitle(for: snap()) == "t")
+        // Needs-you: reason, then the title.
+        #expect(AgentRowFormat.subtitle(for: snap(activity: .blocked)) == "Needs a decision · t")
+        #expect(AgentRowFormat.subtitle(for: snap(state: .needsAttention(exitCode: 2))) == "Finished · exit 2 · t")
+
+        // With no session title: the reason alone, or nothing at all.
+        func titled(_ title: String, state: ActivityState = .quiet, activity: AgentActivity? = nil) -> AgentSnapshot {
+            AgentSnapshot(id: UUID(), title: title, cwd: "/a/b", agentID: "claude",
+                          agentActivity: activity, activityState: state, stateSince: Date())
+        }
+        #expect(AgentRowFormat.subtitle(for: titled("", activity: .blocked)) == "Needs a decision")
+        #expect(AgentRowFormat.subtitle(for: titled("   ")) == nil)
+    }
+
     @Test func contentHeightSkipsEmptyGroups() {
-        let pad: CGFloat = AgentRowFormat.panelPadding * 2
+        let pad: CGFloat = AgentRowFormat.panelTopPadding + AgentRowFormat.panelPadding
         let header: CGFloat = AgentRowFormat.headerHeight
         let needsRow: CGFloat = AgentRowFormat.rowHeightNeedsYou
         let compact: CGFloat = AgentRowFormat.rowHeightCompact

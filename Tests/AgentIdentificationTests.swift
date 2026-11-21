@@ -132,4 +132,114 @@ struct AgentIdentificationTests {
         )
         #expect(result == nil)
     }
+
+    // MARK: - Subtree search (wrapper peeling)
+
+    /// Build an `Environment` from an explicit process tree: `names[pid]` is a
+    /// pid's argv0 basename, `children[pid]` its direct children. `tcgetpgrp`
+    /// reports `leader` as the foreground group.
+    private func environment(
+        leader: pid_t,
+        names: [pid_t: String],
+        children: [pid_t: [pid_t]]
+    ) -> ForegroundAgentIdentifier.Environment {
+        .init(
+            tcgetpgrp: { _ in leader },
+            processName: { names[$0] },
+            childPids: { children[$0] ?? [] }
+        )
+    }
+
+    @Test func wrappedAgentIsFoundBelowTheForegroundWrapper() throws {
+        // The ziplock case: foreground leader is the wrapper, the agent its child.
+        let manifests = ["claude": try manifest(id: "claude")]
+        let result = ForegroundAgentIdentifier.identify(
+            childfd: 5, shellPid: 999, manifests: manifests,
+            environment: environment(leader: 10,
+                                     names: [10: "ziplock", 20: "claude"],
+                                     children: [10: [20]])
+        )
+        #expect(result == "claude")
+    }
+
+    @Test func agentIsFoundSeveralWrapperLevelsDeep() throws {
+        // sh -c → npx → claude: the search descends more than one level.
+        let manifests = ["claude": try manifest(id: "claude")]
+        let result = ForegroundAgentIdentifier.identify(
+            childfd: 5, shellPid: 999, manifests: manifests,
+            environment: environment(leader: 10,
+                                     names: [10: "sh", 20: "npx", 30: "claude"],
+                                     children: [10: [20], 20: [30]])
+        )
+        #expect(result == "claude")
+    }
+
+    @Test func directLeaderAgentWinsOverADescendantAgent() throws {
+        // Leader is itself an agent; it must win over anything it spawns.
+        let manifests = ["claude": try manifest(id: "claude"),
+                         "codex": try manifest(id: "codex")]
+        let result = ForegroundAgentIdentifier.identify(
+            childfd: 5, shellPid: 999, manifests: manifests,
+            environment: environment(leader: 10,
+                                     names: [10: "claude", 20: "codex"],
+                                     children: [10: [20]])
+        )
+        #expect(result == "claude")
+    }
+
+    @Test func breadthFirstPrefersTheShallowerAgent() throws {
+        // A depth-1 agent must win over a depth-2 one reachable via a sibling.
+        let manifests = ["claude": try manifest(id: "claude"),
+                         "codex": try manifest(id: "codex")]
+        let result = ForegroundAgentIdentifier.identify(
+            childfd: 5, shellPid: 999, manifests: manifests,
+            environment: environment(leader: 10,
+                                     names: [10: "ziplock", 20: "bash", 30: "claude", 40: "codex"],
+                                     children: [10: [20, 30], 20: [40]])
+        )
+        #expect(result == "claude")
+    }
+
+    @Test func subtreeWithNoAgentStillFallsBackToGenericTier() throws {
+        let manifests = ["claude": try manifest(id: "claude")]
+        let result = ForegroundAgentIdentifier.identify(
+            childfd: 5, shellPid: 999, manifests: manifests,
+            environment: environment(leader: 10,
+                                     names: [10: "ziplock", 20: "bash"],
+                                     children: [10: [20]])
+        )
+        #expect(result == nil)
+    }
+
+    @Test func cyclicProcessTreeTerminates() throws {
+        // A visited set must make a (pathological) parent↔child cycle terminate.
+        // Reaching the #expect at all proves the walk didn't loop forever.
+        let manifests = ["claude": try manifest(id: "claude")]
+        let result = ForegroundAgentIdentifier.identify(
+            childfd: 5, shellPid: 999, manifests: manifests,
+            environment: environment(leader: 10,
+                                     names: [10: "a", 20: "b"],
+                                     children: [10: [20], 20: [10]])
+        )
+        #expect(result == nil)
+    }
+
+    @Test func searchIsBoundedAndDoesNotReachAnAgentBeyondTheCap() throws {
+        // A chain longer than the cap, with the agent at its very end, must not be
+        // identified — the bound is a hard stop, not best-effort-with-overrun.
+        let manifests = ["claude": try manifest(id: "claude")]
+        let depth = ForegroundAgentIdentifier.maxProcessesExamined + 5
+        var names: [pid_t: String] = [:]
+        var children: [pid_t: [pid_t]] = [:]
+        for i in 1...depth {
+            names[pid_t(i)] = "wrapper"
+            if i < depth { children[pid_t(i)] = [pid_t(i + 1)] }
+        }
+        names[pid_t(depth)] = "claude"   // agent just past the cap
+        let result = ForegroundAgentIdentifier.identify(
+            childfd: 5, shellPid: 999, manifests: manifests,
+            environment: environment(leader: 1, names: names, children: children)
+        )
+        #expect(result == nil)
+    }
 }

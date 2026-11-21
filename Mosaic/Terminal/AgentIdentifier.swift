@@ -64,10 +64,25 @@ enum ForegroundAgentIdentifier {
     struct Environment: Sendable {
         var tcgetpgrp: @Sendable (Int32) -> pid_t
         var processName: @Sendable (pid_t) -> String?
+        /// Direct children of a pid. Defaulted to "no children" so a test that
+        /// exercises only leader identification constructs an `Environment`
+        /// without it and sees the pre-subtree behaviour unchanged.
+        var childPids: @Sendable (pid_t) -> [pid_t]
+
+        init(
+            tcgetpgrp: @escaping @Sendable (Int32) -> pid_t,
+            processName: @escaping @Sendable (pid_t) -> String?,
+            childPids: @escaping @Sendable (pid_t) -> [pid_t] = { _ in [] }
+        ) {
+            self.tcgetpgrp = tcgetpgrp
+            self.processName = processName
+            self.childPids = childPids
+        }
 
         static let live = Environment(
             tcgetpgrp: { Darwin.tcgetpgrp($0) },
-            processName: ForegroundAgentIdentifier.liveProcessName
+            processName: ForegroundAgentIdentifier.liveProcessName,
+            childPids: ForegroundAgentIdentifier.liveChildPids
         )
     }
 
@@ -82,10 +97,16 @@ enum ForegroundAgentIdentifier {
     /// - `tcgetpgrp` fails (returns `<= 0`, e.g. the fd isn't a controlling tty):
     ///   fall back to naming `shellPid` itself.
     /// - `tcgetpgrp` returns the shell's *own* pgid (no foreground child is
-    ///   running; the shell itself is foreground): same fallback as above, and
-    ///   the correct outcome — naming the shell binary (bash/zsh/…) won't match
-    ///   any agent manifest, i.e. "no agent running" resolves to nil, not a
-    ///   crash and not a stale identification.
+    ///   running; the shell itself is foreground): same fallback as above. The
+    ///   shell binary (bash/zsh/…) matches no manifest, so with nothing running
+    ///   under it "no agent" resolves to nil — not a crash, not a stale id.
+    ///
+    /// The foreground leader is only the *root* of the search: `identifyInSubtree`
+    /// walks its descendants too, so an agent launched under a wrapper (a sandbox
+    /// like `ziplock`, or `sh -c`/`npx`/`uvx`/`mise`) is still found — the wrapper
+    /// is the foreground process, the agent its child. The leader is checked
+    /// before any descendant, so a directly-launched agent wins over anything it
+    /// in turn spawns.
     ///
     /// macOS nuance: `tcgetpgrp`'s returned pgid equals the foreground process
     /// group's *leader pid* on this platform, so `processName(pgid)` names the
@@ -99,8 +120,40 @@ enum ForegroundAgentIdentifier {
         guard childfd != -1, shellPid != 0 else { return nil }
         let pgid = environment.tcgetpgrp(childfd)
         let leaderPid = pgid > 0 ? pgid : shellPid
-        guard let name = environment.processName(leaderPid) else { return nil }
-        return AgentIdentifier.resolveManifestID(processName: name, manifests: manifests)
+        return identifyInSubtree(rootPid: leaderPid, manifests: manifests, environment: environment)
+    }
+
+    /// Cap on processes examined per identification, bounding the per-terminal
+    /// cost of the ~1 Hz drive path. A wrapper chain (shell → wrapper → agent) is
+    /// shallow; this leaves generous headroom while refusing to walk a pathological
+    /// tree. The visited set below makes the cap a hard stop even under a cycle.
+    static let maxProcessesExamined = 64
+
+    /// Breadth-first search of the process subtree rooted at `rootPid` for the
+    /// first process whose `argv0` matches a manifest. BFS (not DFS) so the leader
+    /// is tested before its children and shallower processes before deeper ones —
+    /// the outermost agent in a wrapper chain wins. Bounded by
+    /// `maxProcessesExamined` and a visited set so a deep or cyclic tree can neither
+    /// stall the drive path nor loop forever.
+    static func identifyInSubtree(
+        rootPid: pid_t,
+        manifests: [String: CompiledManifest],
+        environment: Environment
+    ) -> String? {
+        var queue = [rootPid]
+        var visited = Set<pid_t>()
+        var examined = 0
+        while examined < maxProcessesExamined, !queue.isEmpty {
+            let pid = queue.removeFirst()
+            guard pid > 0, visited.insert(pid).inserted else { continue }
+            examined += 1
+            if let name = environment.processName(pid),
+               let id = AgentIdentifier.resolveManifestID(processName: name, manifests: manifests) {
+                return id
+            }
+            queue.append(contentsOf: environment.childPids(pid))
+        }
+        return nil
     }
 
     /// Convenience for the real call site (JEF-902): reads `termView.process`'s
@@ -127,11 +180,34 @@ enum ForegroundAgentIdentifier {
     /// tier. Its `argv0` is the launcher (`~/.local/bin/claude`, or bare `claude`),
     /// whose basename is the stable `claude`. This is the same signal herdr's own
     /// identifier prefers (`src/detect/mod.rs` `normalized_process_name`:
-    /// `argv0 ?? name`). We read only the foreground group leader's `argv0`, not
-    /// herdr's full job scan / runtime-unwrap (a node/bun script agent whose argv0
-    /// is the interpreter still falls to the generic tier — a documented gap).
+    /// `argv0 ?? name`). `identify` applies this to the foreground leader *and* its
+    /// descendants (bounded subtree BFS), which peels process-spawning wrappers —
+    /// a sandbox like `ziplock`, or `sh -c`/`npx`/`uvx`/`mise` — that run the agent
+    /// as a child. The remaining gap is an in-process interpreter agent whose own
+    /// argv0 is the interpreter (`node script.js` with no distinct agent child):
+    /// no subtree entry names the agent, so it still falls to the generic tier.
     private static func liveProcessName(pid: pid_t) -> String? {
         argv0Basename(pid: pid) ?? procComm(pid: pid)
+    }
+
+    /// Direct children of `ppid` via `proc_listpids(PROC_PPID_ONLY)`, feeding the
+    /// subtree walk in `identify`. Returns `[]` on any libproc failure (including a
+    /// process that exited mid-walk), so a transient failure degrades to "no
+    /// descendants" rather than a wrong identification.
+    private static func liveChildPids(ppid: pid_t) -> [pid_t] {
+        let type = UInt32(PROC_PPID_ONLY)
+        let info = UInt32(bitPattern: ppid)
+        let sizeBytes = proc_listpids(type, info, nil, 0)
+        guard sizeBytes > 0 else { return [] }
+        let capacity = Int(sizeBytes) / MemoryLayout<pid_t>.stride
+        guard capacity > 0 else { return [] }
+        var pids = [pid_t](repeating: 0, count: capacity)
+        let returnedBytes = pids.withUnsafeMutableBytes { raw in
+            proc_listpids(type, info, raw.baseAddress, Int32(raw.count))
+        }
+        guard returnedBytes > 0 else { return [] }
+        let count = min(Int(returnedBytes) / MemoryLayout<pid_t>.stride, capacity)
+        return Array(pids.prefix(count).filter { $0 > 0 })
     }
 
     /// `argv0` basename via `sysctl(KERN_PROCARGS2)`. Returns nil on any sysctl
