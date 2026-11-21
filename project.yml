@@ -20,7 +20,7 @@ packages:
     revision: 1488fac94f52e3934ffba185b44c2395d4f95d3c
   Sparkle:
     url: https://github.com/sparkle-project/Sparkle
-    revision: 21d8df80440b1ca3b65fa82e40782f1e5a9e6ba2
+    version: 2.10.1
 
 schemes:
   Mosaic:
@@ -85,8 +85,8 @@ targets:
         OSAScriptingDefinition: Mosaic.sdef
         CFBundleDisplayName: Mosaic
         CFBundleIdentifier: com.jeff.Mosaic
-        CFBundleVersion: "40"
-        CFBundleShortVersionString: "0.12.0"
+        CFBundleVersion: "42"
+        CFBundleShortVersionString: "0.12.1"
         NSPrincipalClass: NSApplication
         NSMainNibFile: ""
         LSMinimumSystemVersion: "14.0"

@@ -7,10 +7,16 @@ jobs:
   review:
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      # Least privilege: this job only reads the repo and posts a PR review
+      # comment — it never pushes. The diff it feeds the LLM scanner is
+      # attacker-influenced, so a write-scoped token (persisted into .git/config
+      # by checkout) would let a steered scanner push commits.
+      contents: read
       pull-requests: write
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          persist-credentials: false
       - uses: thejefflarson/soundcheck-action@5b6316fba6e0a598e35fe2ac3bf98e431a17c2ee  # v2.2.0
         with:
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}

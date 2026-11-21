@@ -450,16 +450,30 @@ final class InterceptingTerminalView: LocalProcessTerminalView {
     static let launchableFileExtensions: Set<String> = [
         "app", "command", "terminal", "tool", "workflow", "action",
         "scpt", "scptd", "applescript",
+        // Installer packages and preference panes aren't "applications", but
+        // NSWorkspace.open still *runs* them — a .pkg/.mpkg launches Installer.app
+        // against it and a .prefPane opens System Settings to install it — so a
+        // clicked link to one is code execution, not viewing.
+        "pkg", "mpkg", "prefpane",
     ]
+
+    /// Installer-package and preference-pane UTIs, refused like `.application` /
+    /// `.unixExecutable` below so a renamed or extensionless installer is still
+    /// caught by its resolved type, not just its extension.
+    private static let launchableContentTypes: [UTType] = [
+        UTType("com.apple.installer-package-archive"),
+        UTType("com.apple.systempreference.prefpane"),
+    ].compactMap { $0 }
 
     /// True when opening `url` would execute or launch it rather than display it.
     /// Checks the extension deny-set first, then the resolved UTI so an
-    /// extensionless Mach-O or app bundle is still caught.
+    /// extensionless Mach-O, app bundle, or installer package is still caught.
     static func isLaunchableFileURL(_ url: URL) -> Bool {
         if launchableFileExtensions.contains(url.pathExtension.lowercased()) { return true }
         guard let type = try? url.resourceValues(forKeys: [.contentTypeKey]).contentType
         else { return false }
-        return type.conforms(to: .application) || type.conforms(to: .unixExecutable)
+        if type.conforms(to: .application) || type.conforms(to: .unixExecutable) { return true }
+        return launchableContentTypes.contains { type.conforms(to: $0) }
     }
 
     /// Pure function so we can unit-test without an NSWorkspace side effect.
