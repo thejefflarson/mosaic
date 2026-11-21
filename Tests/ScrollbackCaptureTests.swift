@@ -51,13 +51,14 @@ struct ScrollbackCaptureTests {
     }
 
     @Test func scrollbackCaptureCapsTotalFromTheEnd() {
-        // Three 5-char rows joined by CRLF = "aaaaa\r\nbbbbb\r\nccccc" (21 chars).
-        // A 10-char total cap keeps the last 10 chars.
+        // Rows joined by CRLF make "aaaaa\r\nbbbbb\r\nccccc" — 17 Characters, because
+        // each "\r\n" is a single grapheme. suffix is grapheme-counted, so a 10-char
+        // cap keeps the last 10 Characters: "bbbb" + CRLF + "ccccc".
         let out = TerminalWindowView.scrollbackCapture(
             rows: ["aaaaa", "bbbbb", "ccccc"],
             lineCharCap: 100, keepLines: 10, totalCharCap: 10)
         #expect(out.count == 10)
-        #expect(out == "\r\nccccc")  // last 10 chars of "...bbbbb\r\nccccc"
+        #expect(out == "bbbb\r\nccccc")
     }
 
     // MARK: - matchCount
