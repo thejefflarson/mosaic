@@ -289,9 +289,23 @@ final class CanvasView: FlippedView {
         if selectionRingsLayer.path != nil {
             selectionRingsLayer.lineWidth = 2 / viewport.zoom
         }
+        // Re-rasterize terminals at the new magnification so zoomed text stays crisp.
+        // Only on an actual zoom change — pans share this path but don't alter scale.
+        if zoom != lastRenderZoom {
+            lastRenderZoom = zoom
+            for tw in terminalsInZOrder { tw.updateRenderScale(zoom: zoom) }
+        }
         updateCulling()
+        // Pan moves terminals on screen without changing their frames, so the Metal
+        // surface won't redraw on its own — pin it to the new position each change.
+        // Only on-screen terminals (post-cull) to keep this off the pan hot path.
+        for tw in terminalsInZOrder where !tw.isHidden { tw.redrawNow() }
         onViewportChanged?(viewport)
     }
+
+    /// Last zoom pushed into terminals' render scale, so `applyViewport` skips the
+    /// per-terminal update on a pure pan.
+    private var lastRenderZoom: CGFloat = .nan
 
     /// Hide terminals whose world-space frame doesn't intersect the visible
     /// rect so off-screen terminals cost nothing to composite (no CALayer
@@ -322,6 +336,7 @@ final class CanvasView: FlippedView {
 
     func addTerminal(_ tw: TerminalWindowView) {
         worldView.addSubview(tw)
+        tw.updateRenderScale(zoom: viewport.zoom)
         updateCulling()
     }
 
