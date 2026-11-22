@@ -147,6 +147,25 @@ struct TerminalOSCTests {
         #expect(InterceptingTerminalView.sanitizeNotificationText(s, max: 100) == s)
     }
 
+    // MARK: - Notification attention gate (ADR 007/008/009)
+    //
+    // An agent's own OSC 9/777 notice is gated on the terminal's herdr
+    // AgentActivity, not on message text: a notice arriving while the recognized
+    // agent is still working is background progress, not a call to action.
+
+    @Test func notificationWhileAgentWorkingDoesNotRaise() {
+        #expect(TerminalWindowView.notificationWarrantsAttention(agentActivity: .working) == false)
+    }
+
+    @Test func notificationRaisesForActionableOrNonAgentStates() {
+        // Permission prompt (.blocked), turn-complete (.idle), an unrecognized
+        // agent screen (.unknown), and a non-agent terminal (nil) all still surface.
+        #expect(TerminalWindowView.notificationWarrantsAttention(agentActivity: .blocked))
+        #expect(TerminalWindowView.notificationWarrantsAttention(agentActivity: .idle))
+        #expect(TerminalWindowView.notificationWarrantsAttention(agentActivity: .unknown))
+        #expect(TerminalWindowView.notificationWarrantsAttention(agentActivity: nil))
+    }
+
     // MARK: - stripEscapeSequences (broader coverage)
     //
     // The existing LinkResolutionTests cover C1 introducers; below covers the
