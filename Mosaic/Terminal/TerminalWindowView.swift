@@ -1386,6 +1386,23 @@ final class TerminalWindowView: NSView {
         }
     }
 
+    /// Whether an agent's own desktop notification (OSC 9/777) warrants raising
+    /// attention, given the terminal's current herdr `AgentActivity`. The channel
+    /// carries two things on one wire: genuine "come back" signals and informational
+    /// progress notices (Claude Code's `Agent "…" is waiting on its own background
+    /// work`). A notice arriving while a *recognized* agent is mid-turn (`.working`)
+    /// is progress, not a call to action, so it's dropped. This mirrors how terminal
+    /// emulators gate notifications by surface state rather than message text
+    /// (WezTerm's `SuppressFromFocusedTab`, par-term's `suppress_notifications_when_focused`)
+    /// and how agent-inbox tools derive "needs you" from the agent's structured
+    /// turn-state, not from every notice it emits. Deliberately keyed on state, not
+    /// wording, so it survives the agent rephrasing its message. A permission prompt
+    /// reads `.blocked` and turn-completion reads `.idle`, so those still raise; a
+    /// non-agent terminal (`nil`) is unaffected. See Docs/ADR/007, 008, 009.
+    nonisolated static func notificationWarrantsAttention(agentActivity: AgentActivity?) -> Bool {
+        agentActivity != .working
+    }
+
     /// Sanitize, rate-limit, and forward a notification (title, body) pair to
     /// `onNotification` and the attention reducer. Shared by the OSC 9 and OSC
     /// 777 handlers above (Docs/ADR/008-osc9-notification-override.md) so both
@@ -1395,6 +1412,9 @@ final class TerminalWindowView: NSView {
     /// Always call this on the main actor (OSC handlers hop via `Task { @MainActor }`
     /// before calling in).
     private func emitNotification(title rawTitle: String, body rawBody: String) {
+        // A recognized agent's own notice emitted mid-turn is background progress,
+        // not a call to action — drop it before it banners or raises the pill.
+        guard Self.notificationWarrantsAttention(agentActivity: lastAgentActivity) else { return }
         // Chain sanitizeForClipboard before sanitizeNotificationText to also
         // strip bidi overrides (U+202A–U+202E, U+2066–U+2069), zero-width
         // chars, and U+2028/U+2029. setTerminalTitle uses the same chain;
